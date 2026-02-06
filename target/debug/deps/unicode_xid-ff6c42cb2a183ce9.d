@@ -1,8 +1,0 @@
-/Users/bytedance/dev/rscript/target/debug/deps/unicode_xid-ff6c42cb2a183ce9.d: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/tables.rs
-
-/Users/bytedance/dev/rscript/target/debug/deps/libunicode_xid-ff6c42cb2a183ce9.rlib: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/tables.rs
-
-/Users/bytedance/dev/rscript/target/debug/deps/libunicode_xid-ff6c42cb2a183ce9.rmeta: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/tables.rs
-
-/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/lib.rs:
-/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-xid-0.2.6/src/tables.rs:
