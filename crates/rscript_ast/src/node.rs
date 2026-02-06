@@ -548,6 +548,8 @@ pub enum Expression<'a> {
 pub struct StringLiteral {
     pub data: NodeData,
     pub text: InternedString,
+    /// The actual string value as plain text (for type checking without interner).
+    pub text_name: String,
     pub is_single_quote: bool,
 }
 
@@ -555,6 +557,8 @@ pub struct StringLiteral {
 pub struct NumericLiteral {
     pub data: NodeData,
     pub text: InternedString,
+    /// The actual numeric text as plain string (for type checking without interner).
+    pub text_name: String,
     pub numeric_literal_flags: TokenFlags,
 }
 

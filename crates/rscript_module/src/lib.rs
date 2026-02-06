@@ -326,12 +326,12 @@ fn resolve_node_modules(
 /// e.g. "@scope/pkg/sub/path" -> ("@scope/pkg", "sub/path")
 /// e.g. "lodash/fp" -> ("lodash", "fp")
 fn split_module_name(module_name: &str) -> (&str, &str) {
-    if module_name.starts_with('@') {
-        // Scoped package
-        if let Some(slash_pos) = module_name[1..].find('/') {
-            let first_slash = slash_pos + 1;
-            if let Some(second_slash) = module_name[first_slash + 1..].find('/') {
-                let split_pos = first_slash + 1 + second_slash;
+    if let Some(rest) = module_name.strip_prefix('@') {
+        // Scoped package: @scope/pkg/sub/path
+        if let Some(slash_pos) = rest.find('/') {
+            let first_slash = slash_pos + 1; // position in `rest`
+            if let Some(second_slash) = rest[first_slash + 1..].find('/') {
+                let split_pos = first_slash + 1 + second_slash + 1; // +1 for the '@'
                 return (&module_name[..split_pos], &module_name[split_pos + 1..]);
             }
             return (module_name, "");

@@ -1740,16 +1740,16 @@ impl<'a> Parser<'a> {
             // Object/mapped type literal: { ... }
             SyntaxKind::OpenBraceToken => self.parse_type_literal_or_mapped_type(),
 
-            // Literal types: true, false, null, string/number literals
-            SyntaxKind::TrueKeyword | SyntaxKind::FalseKeyword | SyntaxKind::NullKeyword => {
+            // Literal types: true, false (null is handled as a keyword type above)
+            SyntaxKind::TrueKeyword | SyntaxKind::FalseKeyword => {
                 let pos = self.token_pos();
                 let kind = self.current_token();
                 let end = self.token_end();
                 self.next_token();
-                let expr = match kind {
-                    SyntaxKind::TrueKeyword => Expression::TrueKeyword(NodeData::new(kind, pos, end)),
-                    SyntaxKind::FalseKeyword => Expression::FalseKeyword(NodeData::new(kind, pos, end)),
-                    _ => Expression::NullKeyword(NodeData::new(kind, pos, end)),
+                let expr = if kind == SyntaxKind::TrueKeyword {
+                    Expression::TrueKeyword(NodeData::new(kind, pos, end))
+                } else {
+                    Expression::FalseKeyword(NodeData::new(kind, pos, end))
                 };
                 let expr_ref = self.arena.alloc(expr);
                 TypeNode::LiteralType(LiteralTypeNode {
@@ -1761,15 +1761,16 @@ impl<'a> Parser<'a> {
             SyntaxKind::StringLiteral | SyntaxKind::NumericLiteral => {
                 let pos = self.token_pos();
                 let end = self.token_end();
+                let value = self.token_value().to_string();
                 let expr = if self.current_token() == SyntaxKind::StringLiteral {
                     Expression::StringLiteral(StringLiteral {
                         data: NodeData::new(SyntaxKind::StringLiteral, pos, end),
-                        text: InternedString::dummy(), is_single_quote: false,
+                        text: InternedString::dummy(), text_name: value, is_single_quote: false,
                     })
                 } else {
                     Expression::NumericLiteral(NumericLiteral {
                         data: NodeData::new(SyntaxKind::NumericLiteral, pos, end),
-                        text: InternedString::dummy(), numeric_literal_flags: TokenFlags::NONE,
+                        text: InternedString::dummy(), text_name: value, numeric_literal_flags: TokenFlags::NONE,
                     })
                 };
                 self.next_token();
@@ -1789,7 +1790,7 @@ impl<'a> Parser<'a> {
                 self.next_token(); // consume number
                 let inner = Expression::NumericLiteral(NumericLiteral {
                     data: NodeData::new(SyntaxKind::NumericLiteral, num_pos, num_end),
-                    text: InternedString::dummy(), numeric_literal_flags: TokenFlags::NONE,
+                    text: InternedString::dummy(), text_name: String::new(), numeric_literal_flags: TokenFlags::NONE,
                 });
                 let inner_ref = self.arena.alloc(inner);
                 let prefix = Expression::PrefixUnary(PrefixUnaryExpression {
@@ -2651,20 +2652,23 @@ impl<'a> Parser<'a> {
             SyntaxKind::NumericLiteral => {
                 let pos = self.token_pos();
                 let end = self.token_end();
+                let value = self.token_value().to_string();
                 self.next_token();
                 Expression::NumericLiteral(NumericLiteral {
                     data: NodeData::new(SyntaxKind::NumericLiteral, pos, end),
                     text: InternedString::dummy(),
+                    text_name: value,
                     numeric_literal_flags: TokenFlags::NONE,
                 })
             }
             SyntaxKind::StringLiteral => {
                 let pos = self.token_pos();
                 let end = self.token_end();
+                let value = self.token_value().to_string();
                 self.next_token();
                 Expression::StringLiteral(StringLiteral {
                     data: NodeData::new(SyntaxKind::StringLiteral, pos, end),
-                    text: InternedString::dummy(), is_single_quote: false,
+                    text: InternedString::dummy(), text_name: value, is_single_quote: false,
                 })
             }
             SyntaxKind::BigIntLiteral => {

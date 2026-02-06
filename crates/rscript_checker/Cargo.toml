@@ -10,6 +10,7 @@ rscript_diagnostics = { workspace = true }
 rscript_binder = { workspace = true }
 rscript_evaluator = { workspace = true }
 rustc-hash = { workspace = true }
+indexmap = { workspace = true }
 
 [dev-dependencies]
 bumpalo = { workspace = true }

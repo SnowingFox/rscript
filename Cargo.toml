@@ -66,6 +66,9 @@ serde_json = "1.0"
 dashmap = "6.1"
 rustc-hash = "2.1"
 
+# Ordered hash map (O(1) lookup + insertion order)
+indexmap = "2.7"
+
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
 

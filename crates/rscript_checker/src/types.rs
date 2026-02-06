@@ -3,6 +3,7 @@
 //! Types are stored in a TypeTable (type arena) and referenced by TypeId.
 //! This avoids lifetime issues with recursive type structures.
 
+use indexmap::IndexMap;
 use rscript_ast::types::{ObjectFlags, TypeFlags, TypeId, SymbolId};
 
 /// A type in the TypeScript type system.
@@ -45,7 +46,7 @@ pub enum TypeKind {
     /// Object type (class, interface, object literal, etc.)
     ObjectType {
         object_flags: ObjectFlags,
-        members: Vec<(String, TypeId)>,
+        members: IndexMap<String, TypeId>,
         call_signatures: Vec<Signature>,
         construct_signatures: Vec<Signature>,
         index_infos: Vec<IndexInfo>,
