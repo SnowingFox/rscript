@@ -692,14 +692,14 @@ fn test_line_break_tracking() {
 fn test_unterminated_string_produces_diagnostic() {
     let mut scanner = Scanner::new("\"hello");
     scanner.scan();
-    assert!(scanner.diagnostics().len() > 0);
+    assert!(!scanner.diagnostics().is_empty());
 }
 
 #[test]
 fn test_unterminated_template_produces_diagnostic() {
     let mut scanner = Scanner::new("`hello");
     scanner.scan();
-    assert!(scanner.diagnostics().len() > 0);
+    assert!(!scanner.diagnostics().is_empty());
 }
 
 // --- Contextual identifiers ---

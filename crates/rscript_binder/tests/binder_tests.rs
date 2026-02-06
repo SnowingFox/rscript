@@ -166,7 +166,7 @@ fn test_bind_basic_fixture() {
     let mut binder = Binder::new();
     binder.bind_source_file(&sf);
     // Should not panic, and should create symbols
-    assert!(binder.get_symbols().len() > 0, "Expected symbols to be created");
+    assert!(!binder.get_symbols().is_empty(), "Expected symbols to be created");
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn test_bind_classes_fixture() {
 
     let mut binder = Binder::new();
     binder.bind_source_file(&sf);
-    assert!(binder.get_symbols().len() > 0, "Expected symbols to be created");
+    assert!(!binder.get_symbols().is_empty(), "Expected symbols to be created");
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn test_bind_modules_fixture() {
 
     let mut binder = Binder::new();
     binder.bind_source_file(&sf);
-    assert!(binder.get_symbols().len() > 0, "Expected symbols to be created");
+    assert!(!binder.get_symbols().is_empty(), "Expected symbols to be created");
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn test_bind_generics_fixture() {
 
     let mut binder = Binder::new();
     binder.bind_source_file(&sf);
-    assert!(binder.get_symbols().len() > 0, "Expected symbols to be created");
+    assert!(!binder.get_symbols().is_empty(), "Expected symbols to be created");
 }
 
 // ============================================================================

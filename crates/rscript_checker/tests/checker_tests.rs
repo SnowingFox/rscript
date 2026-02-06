@@ -1197,7 +1197,7 @@ fn test_function_wrong_arg_type() {
         function add(a: number, b: number): number { return a + b; }
         add("hello", "world");
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should detect type mismatch on arguments
     // (depends on checker's ability to validate call arguments)
 }
@@ -1223,7 +1223,7 @@ fn test_enum_member_access() {
         enum Direction { Up, Down, Left, Right }
         const d: Direction = Direction.Up;
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // At minimum, should not panic
 }
 
@@ -1233,7 +1233,7 @@ fn test_const_enum_no_error() {
         const enum Flags { A = 1, B = 2, C = 4 }
         const f = Flags.A;
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic
 }
 
@@ -1341,7 +1341,7 @@ fn test_tuple_type_basic() {
     let src = r#"
         const pair: [string, number] = ["hello", 42];
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should at minimum not panic
 }
 
@@ -1350,7 +1350,7 @@ fn test_tuple_type_readonly() {
     let src = r#"
         const triple: readonly [number, number, number] = [1, 2, 3];
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic
 }
 
@@ -1554,7 +1554,7 @@ fn test_generic_function_identity() {
         function identity<T>(x: T): T { return x; }
         const result = identity(42);
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic; generic inference is simplified
 }
 
@@ -1564,7 +1564,7 @@ fn test_generic_function_multiple_params() {
         function pair<T, U>(a: T, b: U): [T, U] { return [a, b]; }
         const p = pair("hello", 42);
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic
 }
 
@@ -1577,7 +1577,7 @@ fn test_generic_class_no_panic() {
         }
         const c = new Container(42);
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic
 }
 
@@ -1693,7 +1693,7 @@ fn test_try_catch_check() {
             const msg = e;
         }
     "#;
-    let diags = check_source(src);
+    let _diags = check_source(src);
     // Should not panic
 }
 

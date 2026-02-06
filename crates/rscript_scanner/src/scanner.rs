@@ -213,6 +213,7 @@ impl Scanner {
 
     /// Advance position by one character and return the character.
     #[inline]
+    #[allow(dead_code)]
     fn next_char(&mut self) -> Option<char> {
         self.pos += 1;
         self.current_char()

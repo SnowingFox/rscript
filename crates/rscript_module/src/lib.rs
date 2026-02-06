@@ -147,8 +147,7 @@ fn try_path_mappings(
         } else if pattern.ends_with('*') {
             // Wildcard match
             let prefix = &pattern[..pattern.len() - 1];
-            if module_name.starts_with(prefix) {
-                let rest = &module_name[prefix.len()..];
+            if let Some(rest) = module_name.strip_prefix(prefix) {
                 for sub in substitutions {
                     let actual = sub.replace('*', rest);
                     let candidate = format!("{}/{}", base_url, actual);
@@ -163,6 +162,7 @@ fn try_path_mappings(
 }
 
 const TS_EXTENSIONS: &[Extension] = &[Extension::Ts, Extension::Tsx, Extension::Dts];
+#[allow(dead_code)]
 const JS_EXTENSIONS: &[Extension] = &[Extension::Js, Extension::Jsx];
 const ALL_EXTENSIONS: &[Extension] = &[Extension::Ts, Extension::Tsx, Extension::Dts, Extension::Js, Extension::Jsx];
 
@@ -479,6 +479,7 @@ fn collect_matching_files(
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn walk_directory(
     base: &Path,
     dir: &Path,

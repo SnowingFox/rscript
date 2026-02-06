@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 /// A document tracked by the language service.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Document {
     /// The file name.
     file_name: String,

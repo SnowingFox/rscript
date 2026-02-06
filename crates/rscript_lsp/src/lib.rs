@@ -3,6 +3,8 @@
 //! Implements the LSP protocol for editor integration, powered by
 //! the language service.
 
+#![allow(clippy::needless_update)]
+
 use rscript_ls::LanguageService;
 use std::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
@@ -277,12 +279,12 @@ impl LanguageServer for RscriptLspServer {
             }).collect::<Vec<_>>()
         };
 
-        let locations: Vec<Location> = refs.into_iter().filter_map(|(file, start, end)| {
+        let locations: Vec<Location> = refs.into_iter().map(|(file, start, end)| {
             let ref_uri = Url::parse(&file).ok().unwrap_or_else(|| uri.clone());
-            Some(Location {
+            Location {
                 uri: ref_uri,
                 range: Range::new(start, end),
-            })
+            }
         }).collect();
 
         Ok(Some(locations))
@@ -359,6 +361,6 @@ pub async fn start_lsp_server() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| RscriptLspServer::new(client));
+    let (service, socket) = LspService::new(RscriptLspServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }

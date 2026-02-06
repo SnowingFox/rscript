@@ -105,17 +105,17 @@ pub fn is_white_space_single_line(ch: char) -> bool {
 /// Check if a character is a decimal digit.
 #[inline]
 pub fn is_digit(ch: char) -> bool {
-    ('0'..='9').contains(&ch)
+    ch.is_ascii_digit()
 }
 
 /// Check if a character is an octal digit (0-7).
 #[inline]
 pub fn is_octal_digit(ch: char) -> bool {
-    ('0'..='7').contains(&ch)
+    matches!(ch, '0'..='7')
 }
 
 /// Check if a character is a hex digit.
 #[inline]
 pub fn is_hex_digit(ch: char) -> bool {
-    ('0'..='9').contains(&ch) || ('a'..='f').contains(&ch) || ('A'..='F').contains(&ch)
+    ch.is_ascii_hexdigit()
 }

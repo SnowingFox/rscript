@@ -389,10 +389,8 @@ fn print_diagnostic(diag: &rscript_diagnostics::Diagnostic, use_color: bool) {
             eprint!(": ");
         }
         eprintln!(
-            "{}{}{}{} {}{}{}: {}",
-            BOLD, color, category, RESET,
-            CYAN, format!("TS{}", diag.code), RESET,
-            diag.message_text
+            "{BOLD}{color}{category}{RESET} {CYAN}TS{}{RESET}: {}",
+            diag.code, diag.message_text
         );
     } else {
         eprintln!("{}", diag);

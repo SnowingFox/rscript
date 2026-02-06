@@ -552,7 +552,7 @@ impl Checker {
     }
 
     fn check_enum_declaration(&mut self, node: &EnumDeclaration<'_>) {
-        for (_auto_index, member) in node.members.iter().enumerate() {
+        for member in node.members.iter() {
             if let Some(init) = member.initializer {
                 let init_type = self.check_expression(init);
                 let ty = self.type_table.get(init_type);

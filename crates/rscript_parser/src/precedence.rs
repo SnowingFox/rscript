@@ -5,6 +5,7 @@ use rscript_ast::syntax_kind::SyntaxKind;
 /// Operator precedence levels, matching TypeScript's precedence table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum OperatorPrecedence {
     // Ranges from lowest to highest
     Comma = 0,

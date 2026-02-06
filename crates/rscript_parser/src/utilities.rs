@@ -3,6 +3,7 @@
 use rscript_ast::syntax_kind::SyntaxKind;
 
 /// Check if a token kind can start a statement.
+#[allow(dead_code)]
 pub fn can_start_statement(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -69,6 +70,7 @@ pub fn can_start_statement(kind: SyntaxKind) -> bool {
 }
 
 /// Check if a token kind is a left-hand-side expression start.
+#[allow(dead_code)]
 pub fn is_left_hand_side_expression_start(kind: SyntaxKind) -> bool {
     matches!(
         kind,

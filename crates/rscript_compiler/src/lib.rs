@@ -4,7 +4,6 @@
 //! and emit across all source files.
 
 use bumpalo::Bump;
-use rscript_ast::node::SourceFile;
 use rscript_binder::Binder;
 use rscript_checker::Checker;
 use rscript_core::intern::StringInterner;
@@ -12,8 +11,6 @@ use rscript_diagnostics::DiagnosticCollection;
 use rscript_emitter::{Emitter, EmitResult};
 use rscript_parser::Parser;
 use rscript_tsoptions::CompilerOptions;
-use std::collections::HashMap;
-use std::path::Path;
 
 /// The program represents the entire compilation unit.
 pub struct Program<'a> {

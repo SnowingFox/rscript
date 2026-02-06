@@ -330,7 +330,7 @@ impl<'i> Printer<'i> {
         if !self.options.strip_types {
             self.print_optional_type_parameters(node.type_parameters);
         }
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 match clause.token {
                     SyntaxKind::ExtendsKeyword => self.write(" extends "),
@@ -344,7 +344,7 @@ impl<'i> Printer<'i> {
                     if i > 0 { self.write(", "); }
                     self.print_expression(ty.expression);
                     if !self.options.strip_types {
-                        if let Some(ref type_args) = ty.type_arguments {
+                        if let Some(type_args) = ty.type_arguments {
                             self.write("<");
                             for (j, arg) in type_args.iter().enumerate() {
                                 if j > 0 { self.write(", "); }
@@ -486,7 +486,7 @@ impl<'i> Printer<'i> {
         self.write("interface ");
         self.print_identifier(&node.name);
         self.print_optional_type_parameters(node.type_parameters);
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 self.write(" extends ");
                 for (i, ty) in clause.types.iter().enumerate() {
@@ -739,7 +739,7 @@ impl<'i> Printer<'i> {
     }
 
     fn print_import_declaration(&mut self, node: &ImportDeclaration<'_>) {
-        let is_type_only = node.import_clause.as_ref().map_or(false, |c| c.is_type_only);
+        let is_type_only = node.import_clause.as_ref().is_some_and(|c| c.is_type_only);
         if self.options.strip_types && is_type_only { return; }
         self.write("import ");
         if !self.options.strip_types && is_type_only { self.write("type "); }
@@ -944,7 +944,7 @@ impl<'i> Printer<'i> {
             Expression::Call(n) => {
                 self.print_expression(n.expression);
                 if !self.options.strip_types {
-                    if let Some(ref type_args) = n.type_arguments {
+                    if let Some(type_args) = n.type_arguments {
                         self.write("<");
                         for (i, ty) in type_args.iter().enumerate() {
                             if i > 0 { self.write(", "); }
@@ -963,7 +963,7 @@ impl<'i> Printer<'i> {
             Expression::New(n) => {
                 self.write("new ");
                 self.print_expression(n.expression);
-                if let Some(ref args) = n.arguments {
+                if let Some(args) = n.arguments {
                     self.write("(");
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 { self.write(", "); }
@@ -1210,7 +1210,7 @@ impl<'i> Printer<'i> {
             TypeNode::KeywordType(n) => self.write(keyword_to_string(n.data.kind)),
             TypeNode::TypeReference(n) => {
                 self.print_entity_name(&n.type_name);
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     self.write("<");
                     for (i, arg) in type_args.iter().enumerate() {
                         if i > 0 { self.write(", "); }
@@ -1388,7 +1388,7 @@ impl<'i> Printer<'i> {
             }
             TypeNode::ExpressionWithTypeArguments(n) => {
                 self.print_expression(n.expression);
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     self.write("<");
                     for (i, arg) in type_args.iter().enumerate() {
                         if i > 0 { self.write(", "); }
