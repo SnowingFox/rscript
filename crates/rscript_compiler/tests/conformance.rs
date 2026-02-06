@@ -52,6 +52,7 @@ fn collect_ts_files_recursive(dir: &Path, files: &mut Vec<PathBuf>, max_files: u
 
 /// Result of running a conformance test.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ConformanceResult {
     file: PathBuf,
     parse_ok: bool,

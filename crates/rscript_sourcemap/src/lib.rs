@@ -4,6 +4,7 @@
 //! original TypeScript source.
 
 /// A source map builder that accumulates mappings.
+#[allow(dead_code)]
 pub struct SourceMapBuilder {
     mappings: Vec<Mapping>,
     sources: Vec<String>,
