@@ -1,0 +1,10 @@
+[package]
+name = "rscript_nodebuilder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }
+rscript_checker = { workspace = true }
+bumpalo = { workspace = true }

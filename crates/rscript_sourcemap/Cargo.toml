@@ -1,0 +1,7 @@
+[package]
+name = "rscript_sourcemap"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }

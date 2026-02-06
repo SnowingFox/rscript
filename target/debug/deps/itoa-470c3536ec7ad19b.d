@@ -1,0 +1,6 @@
+/Users/bytedance/dev/rscript/target/debug/deps/itoa-470c3536ec7ad19b.d: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/u128_ext.rs
+
+/Users/bytedance/dev/rscript/target/debug/deps/libitoa-470c3536ec7ad19b.rmeta: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/u128_ext.rs
+
+/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/lib.rs:
+/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.17/src/u128_ext.rs:

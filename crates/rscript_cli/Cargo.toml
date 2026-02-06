@@ -1,0 +1,21 @@
+[package]
+name = "rscript_cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rsc"
+path = "src/main.rs"
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_compiler = { workspace = true }
+rscript_tsoptions = { workspace = true }
+rscript_diagnostics = { workspace = true }
+rscript_module = { workspace = true }
+rscript_lsp = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+bumpalo = { workspace = true }
+tokio = { workspace = true }
+libc = "0.2"

@@ -1,0 +1,14 @@
+[package]
+name = "rscript_binder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }
+rscript_diagnostics = { workspace = true }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+bumpalo = { workspace = true }
+rscript_parser = { workspace = true }

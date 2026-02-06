@@ -1,0 +1,12 @@
+[package]
+name = "rscript_lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ls = { workspace = true }
+rscript_compiler = { workspace = true }
+tower-lsp = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }

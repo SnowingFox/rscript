@@ -1,0 +1,8 @@
+/Users/bytedance/dev/rscript/target/debug/deps/rustc_hash-15b68aa899e879dd.d: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/seeded_state.rs
+
+/Users/bytedance/dev/rscript/target/debug/deps/librustc_hash-15b68aa899e879dd.rlib: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/seeded_state.rs
+
+/Users/bytedance/dev/rscript/target/debug/deps/librustc_hash-15b68aa899e879dd.rmeta: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/lib.rs /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/seeded_state.rs
+
+/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/lib.rs:
+/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/3417a4bfdaf3bb73371ab00f2356d4d3/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustc-hash-2.1.1/src/seeded_state.rs:

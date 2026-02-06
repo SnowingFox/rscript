@@ -1,0 +1,11 @@
+[package]
+name = "rscript_scanner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }
+rscript_diagnostics = { workspace = true }
+memchr = { workspace = true }
+unicode-xid = { workspace = true }

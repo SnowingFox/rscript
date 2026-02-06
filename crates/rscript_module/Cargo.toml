@@ -1,0 +1,11 @@
+[package]
+name = "rscript_module"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }
+rscript_tspath = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

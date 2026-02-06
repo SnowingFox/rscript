@@ -1,0 +1,101 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rscript_core",
+    "crates/rscript_diagnostics",
+    "crates/rscript_ast",
+    "crates/rscript_scanner",
+    "crates/rscript_parser",
+    "crates/rscript_binder",
+    "crates/rscript_checker",
+    "crates/rscript_emitter",
+    "crates/rscript_transformers",
+    "crates/rscript_printer",
+    "crates/rscript_nodebuilder",
+    "crates/rscript_module",
+    "crates/rscript_tsoptions",
+    "crates/rscript_tspath",
+    "crates/rscript_sourcemap",
+    "crates/rscript_evaluator",
+    "crates/rscript_lsp",
+    "crates/rscript_ls",
+    "crates/rscript_compiler",
+    "crates/rscript_cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Arena allocation
+bumpalo = { version = "3.16", features = ["collections"] }
+
+# String interning
+lasso = { version = "0.7", features = ["multi-threaded"] }
+
+# Parallelism
+rayon = "1.10"
+
+# Fast scanning
+memchr = "2.7"
+simdutf8 = "0.1"
+unicode-xid = "0.2"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Diagnostics display
+miette = { version = "7.2", features = ["fancy"] }
+thiserror = "2.0"
+
+# LSP
+tower-lsp = "0.20"
+tokio = { version = "1.40", features = ["full"] }
+
+# File watching
+notify = "7.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Concurrent data structures
+dashmap = "6.1"
+rustc-hash = "2.1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Source map
+sourcemap = "9.0"
+
+# Workspace crate references
+rscript_core = { path = "crates/rscript_core" }
+rscript_diagnostics = { path = "crates/rscript_diagnostics" }
+rscript_ast = { path = "crates/rscript_ast" }
+rscript_scanner = { path = "crates/rscript_scanner" }
+rscript_parser = { path = "crates/rscript_parser" }
+rscript_binder = { path = "crates/rscript_binder" }
+rscript_checker = { path = "crates/rscript_checker" }
+rscript_emitter = { path = "crates/rscript_emitter" }
+rscript_transformers = { path = "crates/rscript_transformers" }
+rscript_printer = { path = "crates/rscript_printer" }
+rscript_nodebuilder = { path = "crates/rscript_nodebuilder" }
+rscript_module = { path = "crates/rscript_module" }
+rscript_tsoptions = { path = "crates/rscript_tsoptions" }
+rscript_tspath = { path = "crates/rscript_tspath" }
+rscript_sourcemap = { path = "crates/rscript_sourcemap" }
+rscript_evaluator = { path = "crates/rscript_evaluator" }
+rscript_lsp = { path = "crates/rscript_lsp" }
+rscript_ls = { path = "crates/rscript_ls" }
+rscript_compiler = { path = "crates/rscript_compiler" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3

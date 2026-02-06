@@ -1,0 +1,5 @@
+/Users/bytedance/dev/rscript/target/debug/deps/stable_deref_trait-80e318edb62c0e9c.d: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stable_deref_trait-1.2.1/src/lib.rs
+
+/Users/bytedance/dev/rscript/target/debug/deps/libstable_deref_trait-80e318edb62c0e9c.rmeta: /var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stable_deref_trait-1.2.1/src/lib.rs
+
+/var/folders/kj/36tcpss13yg3563h5h43kfcw0000gn/T/cursor-sandbox-cache/886a2f704827027041d9c087d251cd2c/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stable_deref_trait-1.2.1/src/lib.rs:

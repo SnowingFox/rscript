@@ -1,0 +1,12 @@
+[package]
+name = "rscript_emitter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }
+rscript_printer = { workspace = true }
+rscript_transformers = { workspace = true }
+rscript_sourcemap = { workspace = true }
+rscript_nodebuilder = { workspace = true }

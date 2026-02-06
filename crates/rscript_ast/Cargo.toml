@@ -1,0 +1,11 @@
+[package]
+name = "rscript_ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_diagnostics = { workspace = true }
+rscript_tspath = { workspace = true }
+bumpalo = { workspace = true }
+bitflags = "2.6"

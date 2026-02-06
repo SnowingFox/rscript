@@ -1,0 +1,8 @@
+[package]
+name = "rscript_printer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_core = { workspace = true }
+rscript_ast = { workspace = true }

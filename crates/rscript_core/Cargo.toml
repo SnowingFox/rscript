@@ -1,0 +1,10 @@
+[package]
+name = "rscript_core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bumpalo = { workspace = true }
+lasso = { workspace = true }
+rustc-hash = { workspace = true }
+thiserror = { workspace = true }
