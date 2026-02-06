@@ -69,7 +69,7 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_function_declaration(&mut self, node: &FunctionDeclaration<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
@@ -86,12 +86,12 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_class_declaration(&mut self, node: &ClassDeclaration<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
         }
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 self.visit_heritage_clause(clause);
             }
@@ -102,12 +102,12 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_interface_declaration(&mut self, node: &InterfaceDeclaration<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
         }
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 self.visit_heritage_clause(clause);
             }
@@ -118,7 +118,7 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_type_alias_declaration(&mut self, node: &TypeAliasDeclaration<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
@@ -443,7 +443,7 @@ pub trait AstVisitor<'a> {
 
     fn visit_call_expression(&mut self, node: &CallExpression<'a>) {
         self.visit_expression(node.expression);
-        if let Some(ref type_args) = node.type_arguments {
+        if let Some(type_args) = node.type_arguments {
             for ta in type_args.iter() {
                 self.visit_type_node(ta);
             }
@@ -455,12 +455,12 @@ pub trait AstVisitor<'a> {
 
     fn visit_new_expression(&mut self, node: &NewExpression<'a>) {
         self.visit_expression(node.expression);
-        if let Some(ref type_args) = node.type_arguments {
+        if let Some(type_args) = node.type_arguments {
             for ta in type_args.iter() {
                 self.visit_type_node(ta);
             }
         }
-        if let Some(ref args) = node.arguments {
+        if let Some(args) = node.arguments {
             for arg in args.iter() {
                 self.visit_expression(arg);
             }
@@ -478,7 +478,7 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_function_expression(&mut self, node: &FunctionExpression<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
@@ -493,7 +493,7 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_arrow_function(&mut self, node: &ArrowFunction<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
@@ -522,12 +522,12 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_class_expression(&mut self, node: &ClassExpression<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
         }
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 self.visit_heritage_clause(clause);
             }
@@ -543,14 +543,14 @@ pub trait AstVisitor<'a> {
         match ty {
             TypeNode::KeywordType(_) => {}
             TypeNode::TypeReference(n) => {
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     for ta in type_args.iter() {
                         self.visit_type_node(ta);
                     }
                 }
             }
             TypeNode::FunctionType(n) => {
-                if let Some(ref tps) = n.type_parameters {
+                if let Some(tps) = n.type_parameters {
                     for tp in tps.iter() {
                         self.visit_type_parameter(tp);
                     }
@@ -563,7 +563,7 @@ pub trait AstVisitor<'a> {
                 }
             }
             TypeNode::ConstructorType(n) => {
-                if let Some(ref tps) = n.type_parameters {
+                if let Some(tps) = n.type_parameters {
                     for tp in tps.iter() {
                         self.visit_type_parameter(tp);
                     }
@@ -576,7 +576,7 @@ pub trait AstVisitor<'a> {
                 }
             }
             TypeNode::TypeQuery(n) => {
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     for ta in type_args.iter() {
                         self.visit_type_node(ta);
                     }
@@ -643,7 +643,7 @@ pub trait AstVisitor<'a> {
             }
             TypeNode::ImportType(n) => {
                 self.visit_type_node(n.argument);
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     for ta in type_args.iter() {
                         self.visit_type_node(ta);
                     }
@@ -656,7 +656,7 @@ pub trait AstVisitor<'a> {
             }
             TypeNode::ExpressionWithTypeArguments(n) => {
                 self.visit_expression(n.expression);
-                if let Some(ref type_args) = n.type_arguments {
+                if let Some(type_args) = n.type_arguments {
                     for ta in type_args.iter() {
                         self.visit_type_node(ta);
                     }
@@ -717,7 +717,7 @@ pub trait AstVisitor<'a> {
     fn visit_heritage_clause(&mut self, node: &HeritageClause<'a>) {
         for ty in node.types.iter() {
             self.visit_expression(ty.expression);
-            if let Some(ref type_args) = ty.type_arguments {
+            if let Some(type_args) = ty.type_arguments {
                 for ta in type_args.iter() {
                     self.visit_type_node(ta);
                 }
@@ -779,7 +779,7 @@ pub trait AstVisitor<'a> {
     }
 
     fn visit_method_declaration(&mut self, node: &MethodDeclaration<'a>) {
-        if let Some(ref type_params) = node.type_parameters {
+        if let Some(type_params) = node.type_parameters {
             for tp in type_params.iter() {
                 self.visit_type_parameter(tp);
             }
@@ -803,7 +803,7 @@ pub trait AstVisitor<'a> {
                 }
             }
             TypeElement::MethodSignature(n) => {
-                if let Some(ref tps) = n.type_parameters {
+                if let Some(tps) = n.type_parameters {
                     for tp in tps.iter() {
                         self.visit_type_parameter(tp);
                     }
@@ -816,7 +816,7 @@ pub trait AstVisitor<'a> {
                 }
             }
             TypeElement::CallSignature(n) => {
-                if let Some(ref tps) = n.type_parameters {
+                if let Some(tps) = n.type_parameters {
                     for tp in tps.iter() {
                         self.visit_type_parameter(tp);
                     }
@@ -829,7 +829,7 @@ pub trait AstVisitor<'a> {
                 }
             }
             TypeElement::ConstructSignature(n) => {
-                if let Some(ref tps) = n.type_parameters {
+                if let Some(tps) = n.type_parameters {
                     for tp in tps.iter() {
                         self.visit_type_parameter(tp);
                     }

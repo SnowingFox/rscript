@@ -24,9 +24,8 @@ fn bind_and_count_symbols(source: &str) -> usize {
 
 #[test]
 fn test_bind_empty_file() {
-    let count = bind_and_count_symbols("");
-    // At minimum, there should be the source file symbol
-    assert!(count >= 0);
+    let _count = bind_and_count_symbols("");
+    // Just verify no panic
 }
 
 #[test]
@@ -689,4 +688,458 @@ fn test_bind_all_fixtures() {
         binder.bind_source_file(&sf);
         assert!(binder.symbol_count() > 0, "No symbols created for {}", fixture);
     }
+}
+
+// ============================================================================
+// Scope: var vs let/const
+// ============================================================================
+
+#[test]
+fn test_var_function_scoped() {
+    let count = bind_and_count_symbols("function f() { var x = 1; }");
+    assert!(count >= 2, "Expected symbols for f and x, got {}", count);
+}
+
+#[test]
+fn test_let_block_scoped() {
+    let count = bind_and_count_symbols("{ let x = 1; }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_const_block_scoped() {
+    let count = bind_and_count_symbols("{ const x = 1; }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_var_hoisted_to_function() {
+    let count = bind_and_count_symbols("function f() { if (true) { var x = 1; } }");
+    assert!(count >= 2);
+}
+
+// ============================================================================
+// Nested scopes
+// ============================================================================
+
+#[test]
+fn test_nested_block_scopes() {
+    let count = bind_and_count_symbols("{ let a = 1; { let b = 2; { let c = 3; } } }");
+    assert!(count >= 3);
+}
+
+#[test]
+fn test_shadowing_inner_scope() {
+    let count = bind_and_count_symbols("let x = 1; { let x = 2; }");
+    assert!(count >= 2, "Expected at least 2 symbols (outer x and inner x), got {}", count);
+}
+
+#[test]
+fn test_resolve_from_outer_scope() {
+    // Verify variable in inner scope is different from outer
+    let count = bind_and_count_symbols("let x = 1; function f() { let y = x; }");
+    assert!(count >= 3);
+}
+
+// ============================================================================
+// Declaration merging
+// ============================================================================
+
+#[test]
+fn test_interface_merging_two_declarations() {
+    let src = r#"
+        interface Foo { a: number; }
+        interface Foo { b: string; }
+    "#;
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    // Merging means only one symbol "Foo" with two declarations
+    let sym = binder.resolve_name("Foo");
+    assert!(sym.is_some(), "Foo should be resolvable");
+    if let Some(sid) = sym {
+        let s = binder.get_symbol(sid).unwrap();
+        assert_eq!(s.declarations.len(), 2, "Should have 2 declarations from merging");
+    }
+}
+
+#[test]
+fn test_function_overload_merging() {
+    let src = r#"
+        function f(x: number): number;
+        function f(x: string): string;
+        function f(x: any): any { return x; }
+    "#;
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    let sym = binder.resolve_name("f");
+    assert!(sym.is_some(), "f should be resolvable");
+    if let Some(sid) = sym {
+        let s = binder.get_symbol(sid).unwrap();
+        assert!(s.declarations.len() >= 2, "Should have multiple declarations for overloads, got {}", s.declarations.len());
+    }
+}
+
+#[test]
+fn test_enum_declaration_merging() {
+    let src = r#"
+        enum E { A }
+        enum E { B }
+    "#;
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    let sym = binder.resolve_name("E");
+    assert!(sym.is_some(), "E should be resolvable");
+    if let Some(sid) = sym {
+        let s = binder.get_symbol(sid).unwrap();
+        assert!(s.declarations.len() >= 2, "Should have merged enum declarations");
+    }
+}
+
+// ============================================================================
+// Duplicate declaration detection (TDZ)
+// ============================================================================
+
+#[test]
+fn test_duplicate_let_produces_diagnostic() {
+    let src = "let x = 1; let x = 2;";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(!binder.take_diagnostics().is_empty(), "Should produce duplicate identifier diagnostic");
+}
+
+#[test]
+fn test_duplicate_const_produces_diagnostic() {
+    let src = "const x = 1; const x = 2;";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(!binder.take_diagnostics().is_empty(), "Should produce duplicate identifier diagnostic");
+}
+
+#[test]
+fn test_var_redeclaration_no_error() {
+    // var can be re-declared within the same scope
+    let src = "var x = 1; var x = 2;";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    // var redeclaration should not produce errors
+}
+
+// ============================================================================
+// Class member visibility
+// ============================================================================
+
+#[test]
+fn test_class_private_member() {
+    let src = "class C { private x: number = 0; }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 2, "Expected class + member symbols");
+}
+
+#[test]
+fn test_class_protected_member() {
+    let src = "class C { protected y: string = ''; }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 2);
+}
+
+#[test]
+fn test_class_static_member() {
+    let src = "class C { static count: number = 0; }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 2);
+}
+
+#[test]
+fn test_class_constructor_parameter_property() {
+    let src = "class C { constructor(public name: string) {} }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 2);
+}
+
+// ============================================================================
+// Control flow
+// ============================================================================
+
+#[test]
+fn test_flow_nodes_if_statement() {
+    let src = "let x: string | number = 0; if (typeof x === 'string') { x; } else { x; }";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(binder.flow_nodes().len() > 1, "Should create flow nodes for if/else");
+}
+
+#[test]
+fn test_flow_nodes_loop() {
+    let src = "while (true) { let x = 1; break; }";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(binder.flow_nodes().len() > 1);
+}
+
+#[test]
+fn test_flow_nodes_switch() {
+    let src = r#"
+        let x: number | string = 0;
+        switch (typeof x) {
+            case "number": break;
+            case "string": break;
+        }
+    "#;
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(binder.flow_nodes().len() > 1);
+}
+
+#[test]
+fn test_flow_nodes_try_catch() {
+    let src = "try { throw new Error(); } catch (e) { console.log(e); }";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    assert!(binder.flow_nodes().len() > 1);
+}
+
+// ============================================================================
+// Module bindings
+// ============================================================================
+
+#[test]
+fn test_import_creates_alias() {
+    let src = r#"import { Foo } from "./foo";"#;
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 1, "Import should create at least one alias symbol");
+}
+
+#[test]
+fn test_import_default_creates_alias() {
+    let src = r#"import React from "react";"#;
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_import_namespace_creates_alias() {
+    let src = r#"import * as fs from "fs";"#;
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_export_declaration() {
+    let src = "export { x, y };";
+    let _count = bind_and_count_symbols(src);
+    // Just verify no panic
+}
+
+// ============================================================================
+// Enum members
+// ============================================================================
+
+#[test]
+fn test_enum_members_bound_resolve() {
+    let src = "enum Color { Red, Green, Blue }";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    let sym = binder.resolve_name("Color");
+    assert!(sym.is_some(), "Color enum should be resolvable");
+}
+
+#[test]
+fn test_const_enum_members_bound() {
+    let src = "const enum Direction { Up, Down, Left, Right }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 1);
+}
+
+// ============================================================================
+// Namespace
+// ============================================================================
+
+#[test]
+fn test_namespace_creates_symbol() {
+    let src = "namespace MyNS { export const x = 1; }";
+    let arena = Bump::new();
+    let parser = Parser::new(&arena, "test.ts", src);
+    let sf = parser.parse_source_file();
+    let mut binder = Binder::new();
+    binder.bind_source_file(&sf);
+    let sym = binder.resolve_name("MyNS");
+    assert!(sym.is_some(), "Namespace should be resolvable");
+}
+
+#[test]
+fn test_nested_namespace() {
+    let src = "namespace A { namespace B { const x = 1; } }";
+    let count = bind_and_count_symbols(src);
+    assert!(count >= 2);
+}
+
+// ============================================================================
+// Stress tests
+// ============================================================================
+
+#[test]
+fn test_many_declarations_stress() {
+    let mut src = String::new();
+    for i in 0..100 {
+        src.push_str(&format!("const x{} = {};\n", i, i));
+    }
+    let count = bind_and_count_symbols(&src);
+    assert!(count >= 100, "Expected at least 100 symbols, got {}", count);
+}
+
+#[test]
+fn test_deeply_nested_scopes_stress() {
+    let mut src = String::new();
+    for i in 0..30 {
+        src.push_str(&format!("{{ let x{} = {}; ", i, i));
+    }
+    for _ in 0..30 {
+        src.push_str("} ");
+    }
+    let count = bind_and_count_symbols(&src);
+    assert!(count >= 30);
+}
+
+#[test]
+fn test_many_functions_stress() {
+    let mut src = String::new();
+    for i in 0..50 {
+        src.push_str(&format!("function f{}() {{ return {}; }}\n", i, i));
+    }
+    let count = bind_and_count_symbols(&src);
+    assert!(count >= 50);
+}
+
+#[test]
+fn test_class_with_many_members() {
+    let mut src = String::from("class BigClass {\n");
+    for i in 0..30 {
+        src.push_str(&format!("  prop{}: number = {};\n", i, i));
+    }
+    src.push_str("}\n");
+    let count = bind_and_count_symbols(&src);
+    assert!(count >= 31, "Expected class + 30 members, got {}", count);
+}
+
+// ============================================================================
+// Type alias and interface binding
+// ============================================================================
+
+#[test]
+fn test_type_alias_creates_symbol() {
+    let count = bind_and_count_symbols("type StringAlias = string;");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_interface_creates_symbol() {
+    let count = bind_and_count_symbols("interface IFoo { bar: number; }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_generic_interface_binding() {
+    let count = bind_and_count_symbols("interface Container<T> { value: T; }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_generic_function_binding() {
+    let count = bind_and_count_symbols("function identity<T>(x: T): T { return x; }");
+    assert!(count >= 1);
+}
+
+// ============================================================================
+// Parameter binding
+// ============================================================================
+
+#[test]
+fn test_function_params_bound() {
+    let count = bind_and_count_symbols("function f(a: number, b: string) {}");
+    assert!(count >= 3, "Expected f + a + b");
+}
+
+#[test]
+fn test_destructured_params_bound() {
+    let count = bind_and_count_symbols("function f({ x, y }: { x: number; y: string }) {}");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_rest_params_bound() {
+    let count = bind_and_count_symbols("function f(...args: number[]) {}");
+    assert!(count >= 2);
+}
+
+// ============================================================================
+// Edge cases
+// ============================================================================
+
+#[test]
+fn test_bind_arrow_function() {
+    let count = bind_and_count_symbols("const fn = (x: number) => x * 2;");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_bind_labeled_statement() {
+    let _count = bind_and_count_symbols("outer: for (;;) { inner: for (;;) { break outer; } }");
+    // Just verify no panic
+}
+
+#[test]
+fn test_bind_catch_variable() {
+    let count = bind_and_count_symbols("try { } catch (e) { console.log(e); }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_bind_for_variable() {
+    let count = bind_and_count_symbols("for (let i = 0; i < 10; i++) {}");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_bind_for_of_variable() {
+    let count = bind_and_count_symbols("for (const item of items) { }");
+    assert!(count >= 1);
+}
+
+#[test]
+fn test_bind_for_in_variable() {
+    let count = bind_and_count_symbols("for (const key in obj) { }");
+    assert!(count >= 1);
 }

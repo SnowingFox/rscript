@@ -20,7 +20,7 @@ const MAX_RECURSION_DEPTH: u32 = 200;
 /// Allocate a Vec into the arena as a slice.
 ///
 /// Uses ManuallyDrop to prevent double-free on panic inside alloc_slice_fill_with.
-fn alloc_vec_in<'a, T>(arena: &'a Bump, vec: Vec<T>) -> &'a [T] {
+fn alloc_vec_in<T>(arena: &Bump, vec: Vec<T>) -> &[T] {
     if vec.is_empty() {
         return &[];
     }
@@ -246,11 +246,16 @@ impl<'a> Parser<'a> {
         self.parse_enum_declaration()
     }
 
-    fn is_labeled_statement(&self) -> bool {
+    fn is_labeled_statement(&mut self) -> bool {
         // Look ahead: identifier followed by colon
-        self.current_token() == SyntaxKind::Identifier
-        // We'd need lookahead for ':' but simplified
-            && false // disabled for now to avoid ambiguity
+        if self.current_token() != SyntaxKind::Identifier {
+            return false;
+        }
+        let saved = self.scanner.save_state();
+        let next = self.scanner.scan();
+        let result = next == SyntaxKind::ColonToken;
+        self.scanner.restore_state(saved);
+        result
     }
 
     fn parse_declaration(&mut self) -> Statement<'a> {
@@ -265,15 +270,15 @@ impl<'a> Parser<'a> {
         }
 
         // Skip modifiers: declare, abstract, async, export, default
-        loop {
-            match self.current_token() {
-                SyntaxKind::DeclareKeyword
+        while matches!(
+            self.current_token(),
+            SyntaxKind::DeclareKeyword
                 | SyntaxKind::AbstractKeyword
                 | SyntaxKind::AsyncKeyword
                 | SyntaxKind::ExportKeyword
-                | SyntaxKind::DefaultKeyword => { self.next_token(); }
-                _ => break,
-            }
+                | SyntaxKind::DefaultKeyword
+        ) {
+            self.next_token();
         }
 
         match self.current_token() {
@@ -1169,10 +1174,23 @@ impl<'a> Parser<'a> {
         let pos = self.token_pos();
         self.expect_token(SyntaxKind::ImportKeyword);
 
-        // import type
-        let _is_type_only = self.is_identifier_text("type") && {
-            // Look ahead: if next token is identifier or { or *, it's import type
-            false // simplified - treat all as value imports
+        // import type { ... } or import type X from ...
+        let is_type_only_import = if self.current_token() == SyntaxKind::TypeKeyword {
+            // Look ahead: if next token is identifier, { or *, it's `import type`
+            let saved = self.scanner.save_state();
+            let next = self.scanner.scan();
+            let is_type_import = matches!(next,
+                SyntaxKind::Identifier | SyntaxKind::OpenBraceToken | SyntaxKind::AsteriskToken
+            );
+            self.scanner.restore_state(saved);
+            if is_type_import {
+                self.next_token(); // consume 'type'
+                true
+            } else {
+                false
+            }
+        } else {
+            false
         };
 
         // Side-effect import: import 'module'
@@ -1187,7 +1205,11 @@ impl<'a> Parser<'a> {
         }
 
         // Parse import clause
-        let import_clause = self.parse_import_clause();
+        let import_clause = if is_type_only_import {
+            self.parse_import_clause_typed()
+        } else {
+            self.parse_import_clause()
+        };
 
         self.expect_token(SyntaxKind::FromKeyword);
         let module_specifier = self.parse_expression_and_alloc();
@@ -1201,8 +1223,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_import_clause(&mut self) -> ImportClause<'a> {
+        self.parse_import_clause_inner(false)
+    }
+
+    fn parse_import_clause_typed(&mut self) -> ImportClause<'a> {
+        self.parse_import_clause_inner(true)
+    }
+
+    fn parse_import_clause_inner(&mut self, is_type_only: bool) -> ImportClause<'a> {
         let pos = self.token_pos();
-        let is_type_only = false;
 
         // Default import or namespace or named
         let (name, named_bindings) = if self.current_token() == SyntaxKind::AsteriskToken {
@@ -1254,7 +1283,23 @@ impl<'a> Parser<'a> {
         let mut elements = Vec::new();
         while self.current_token() != SyntaxKind::CloseBraceToken && self.current_token() != SyntaxKind::EndOfFileToken {
             let spos = self.token_pos();
-            let is_type_only = self.is_identifier_text("type") && false; // simplified
+            // Per-specifier type-only: `import { type Foo }` (TS 4.5+)
+            // Check if current token is `type` followed by an identifier (not `as` or `}`)
+            let is_type_only = if self.is_identifier_text("type") {
+                let saved = self.scanner.save_state();
+                let next = self.scanner.scan();
+                let is_type_spec = matches!(next, SyntaxKind::Identifier)
+                    || next.is_keyword(); // `type default` etc.
+                self.scanner.restore_state(saved);
+                if is_type_spec {
+                    self.next_token(); // consume `type`
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let first = self.parse_identifier();
             let (property_name, name) = if self.optional_token(SyntaxKind::AsKeyword).is_some() {
                 (Some(first), self.parse_identifier())
@@ -1309,7 +1354,25 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // export { ... }
+        // export type { ... } or export type * ...
+        let is_type_only_export = if self.current_token() == SyntaxKind::TypeKeyword {
+            let saved = self.scanner.save_state();
+            let next = self.scanner.scan();
+            let is_type_export = matches!(next,
+                SyntaxKind::OpenBraceToken | SyntaxKind::AsteriskToken
+            );
+            self.scanner.restore_state(saved);
+            if is_type_export {
+                self.next_token(); // consume 'type'
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // export { ... } or export type { ... }
         if self.current_token() == SyntaxKind::OpenBraceToken {
             let named = self.parse_named_exports();
             let module_specifier = if self.current_token() == SyntaxKind::FromKeyword {
@@ -1320,13 +1383,13 @@ impl<'a> Parser<'a> {
             self.parse_expected_semicolon();
             return Statement::ExportDeclaration(ExportDeclaration {
                 data: NodeData::new(SyntaxKind::ExportDeclaration, pos, end),
-                is_type_only: false,
+                is_type_only: is_type_only_export,
                 export_clause: Some(NamedExportBindings::NamedExports(named)),
                 module_specifier, attributes: None,
             });
         }
 
-        // export * from '...'
+        // export * from '...' or export type * from '...'
         if self.current_token() == SyntaxKind::AsteriskToken {
             self.next_token();
             // export * as ns from '...'
@@ -1439,12 +1502,15 @@ impl<'a> Parser<'a> {
     fn parse_parameter(&mut self) -> ParameterDeclaration<'a> {
         let pos = self.token_pos();
         // Skip modifiers (public, private, protected, readonly, override)
-        loop {
-            match self.current_token() {
-                SyntaxKind::PublicKeyword | SyntaxKind::PrivateKeyword | SyntaxKind::ProtectedKeyword
-                | SyntaxKind::ReadonlyKeyword | SyntaxKind::OverrideKeyword => { self.next_token(); }
-                _ => break,
-            }
+        while matches!(
+            self.current_token(),
+            SyntaxKind::PublicKeyword
+                | SyntaxKind::PrivateKeyword
+                | SyntaxKind::ProtectedKeyword
+                | SyntaxKind::ReadonlyKeyword
+                | SyntaxKind::OverrideKeyword
+        ) {
+            self.next_token();
         }
         let dot_dot_dot_token = self.optional_token(SyntaxKind::DotDotDotToken);
         let name = self.parse_binding_name();
@@ -1743,7 +1809,7 @@ impl<'a> Parser<'a> {
             }
 
             // Type reference (identifier, possibly qualified, possibly with type args)
-            SyntaxKind::Identifier | _ if self.current_token().is_keyword() => {
+            _ if self.current_token() == SyntaxKind::Identifier || self.current_token().is_keyword() => {
                 let pos = self.token_pos();
                 let name = self.parse_entity_name();
                 let type_arguments = self.try_parse_type_arguments();
@@ -2196,10 +2262,23 @@ impl<'a> Parser<'a> {
                 original_keyword_kind: None,
             });
         }
-        // Comma expression: a, b, c
-        let expr = self.parse_assignment_expression();
+        // Comma expression: a, b, c → represented as nested Binary(left, CommaToken, right)
+        let mut expr = self.parse_assignment_expression();
+        while self.current_token() == SyntaxKind::CommaToken {
+            let pos = self.token_pos();
+            self.next_token(); // consume comma
+            let right = self.parse_assignment_expression();
+            let end = self.token_end();
+            let left_ref = self.arena.alloc(expr);
+            let right_ref = self.arena.alloc(right);
+            expr = Expression::Binary(BinaryExpression {
+                data: NodeData::new(SyntaxKind::BinaryExpression, pos, end),
+                left: left_ref,
+                operator_token: Token::new(SyntaxKind::CommaToken, pos, pos + 1),
+                right: right_ref,
+            });
+        }
         self.recursion_depth -= 1;
-        // TODO: handle comma expressions if needed
         expr
     }
 

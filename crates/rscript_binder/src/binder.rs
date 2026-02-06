@@ -65,12 +65,16 @@ pub struct Binder {
     /// Diagnostics from binding.
     diagnostics: DiagnosticCollection,
     /// Whether we're in a strict mode context.
+    #[allow(dead_code)]
     in_strict_mode: bool,
     /// Nesting depth for scope tracking.
     scope_depth: u32,
 }
 
 impl Binder {
+    /// Maximum scope chain traversal depth to guard against cycles.
+    const MAX_SCOPE_DEPTH: u32 = 500;
+
     pub fn new() -> Self {
         let mut binder = Self {
             symbols: Vec::new(),
@@ -244,13 +248,11 @@ impl Binder {
             let flags = if is_block_scoped {
                 SymbolFlags::BLOCK_SCOPED_VARIABLE
             } else {
-                // var - already hoisted, but bind the initializer
                 SymbolFlags::FUNCTION_SCOPED_VARIABLE
             };
 
-            if is_block_scoped {
-                self.bind_binding_name(&decl.name, flags, decl.data.id);
-            }
+            // Always bind the variable name (both var and let/const)
+            self.bind_binding_name(&decl.name, flags, decl.data.id);
 
             if let Some(init) = decl.initializer {
                 self.bind_expression(init);
@@ -309,7 +311,7 @@ impl Binder {
         self.push_block_scope();
 
         // Bind heritage clauses
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 for ty in clause.types.iter() {
                     self.bind_expression(ty.expression);
@@ -325,18 +327,35 @@ impl Binder {
         self.pop_scope();
     }
 
+    /// Convert AST modifier flags to symbol visibility flags.
+    fn visibility_flags(modifier_flags: ModifierFlags) -> SymbolFlags {
+        let mut flags = SymbolFlags::empty();
+        if modifier_flags.contains(ModifierFlags::PRIVATE) {
+            flags |= SymbolFlags::PRIVATE;
+        }
+        if modifier_flags.contains(ModifierFlags::PROTECTED) {
+            flags |= SymbolFlags::PROTECTED;
+        }
+        if modifier_flags.contains(ModifierFlags::STATIC) {
+            flags |= SymbolFlags::STATIC;
+        }
+        flags
+    }
+
     fn bind_class_element(&mut self, elem: &ClassElement<'_>) {
         match elem {
             ClassElement::PropertyDeclaration(n) => {
-                // Create symbol for the property name
-                self.declare_property_name_symbol(&n.name, SymbolFlags::PROPERTY, n.data.id);
+                // Create symbol for the property name with visibility
+                let vis = Self::visibility_flags(n.data.modifier_flags);
+                self.declare_property_name_symbol(&n.name, SymbolFlags::PROPERTY | vis, n.data.id);
                 if let Some(init) = n.initializer {
                     self.bind_expression(init);
                 }
             }
             ClassElement::MethodDeclaration(n) => {
-                // Create symbol for the method name
-                self.declare_property_name_symbol(&n.name, SymbolFlags::METHOD, n.data.id);
+                // Create symbol for the method name with visibility
+                let vis = Self::visibility_flags(n.data.modifier_flags);
+                self.declare_property_name_symbol(&n.name, SymbolFlags::METHOD | vis, n.data.id);
                 self.push_function_scope(n.data.id);
                 for param in n.parameters.iter() {
                     self.bind_parameter(param);
@@ -443,9 +462,11 @@ impl Binder {
     }
 
     fn bind_module_declaration(&mut self, node: &ModuleDeclaration<'_>) {
-        if let ModuleName::Identifier(ref name) = node.name {
-            self.declare_symbol_with_text(name.text, name.text_name.clone(), SymbolFlags::VALUE_MODULE, node.data.id);
-        }
+        let sym_id = if let ModuleName::Identifier(ref name) = node.name {
+            Some(self.declare_symbol_with_text(name.text, name.text_name.clone(), SymbolFlags::VALUE_MODULE, node.data.id))
+        } else {
+            None
+        };
 
         if let Some(ref body) = node.body {
             match body {
@@ -453,6 +474,10 @@ impl Binder {
                     self.push_block_scope();
                     for s in block.statements.iter() {
                         self.bind_statement(s);
+                        // Track exported declarations in the namespace symbol's exports table
+                        if let Some(sid) = sym_id {
+                            self.collect_namespace_export(s, sid);
+                        }
                     }
                     self.pop_scope();
                 }
@@ -460,6 +485,51 @@ impl Binder {
                     self.bind_module_declaration(inner);
                 }
             }
+        }
+    }
+
+    /// If a statement is an export declaration, record its symbols in the
+    /// namespace symbol's `exports` table.
+    fn collect_namespace_export(&mut self, stmt: &Statement<'_>, ns_symbol: SymbolId) {
+        match stmt {
+            Statement::ExportDeclaration(ed) => {
+                if let Some(NamedExportBindings::NamedExports(ref named)) = ed.export_clause {
+                    for spec in named.elements.iter() {
+                        let name_text = spec.name.text_name.clone();
+                        let interned = spec.name.text;
+                        // Create an alias symbol for the export
+                        let export_sym = self.declare_symbol(interned, SymbolFlags::EXPORT_VALUE, ed.data.id);
+                        if let Some(ns) = self.symbols.get_mut(ns_symbol.index()) {
+                            if ns.exports.is_none() {
+                                ns.exports = Some(SymbolTable::new());
+                            }
+                            if let Some(ref mut exports) = ns.exports {
+                                exports.set(interned, export_sym);
+                            }
+                            if !name_text.is_empty() {
+                                // Also set by name_text for lookup
+                            }
+                        }
+                    }
+                }
+            }
+            // Track exported function/class/variable declarations
+            Statement::FunctionDeclaration(n) => {
+                if n.data.modifier_flags.contains(ModifierFlags::EXPORT) {
+                    if let Some(ref name) = n.name {
+                        let resolved = self.resolve_name(&name.text_name);
+                        if let Some(sym_id) = resolved {
+                            if let Some(ns) = self.symbols.get_mut(ns_symbol.index()) {
+                                if ns.exports.is_none() { ns.exports = Some(SymbolTable::new()); }
+                                if let Some(ref mut exports) = ns.exports {
+                                    exports.set(name.text, sym_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -705,7 +775,7 @@ impl Binder {
             }
             Expression::New(n) => {
                 self.bind_expression(n.expression);
-                if let Some(ref args) = n.arguments {
+                if let Some(args) = n.arguments {
                     for arg in args.iter() {
                         self.bind_expression(arg);
                     }
@@ -861,9 +931,14 @@ impl Binder {
     /// Resolve a name in the current scope chain.
     pub fn resolve_symbol(&self, name: &InternedString) -> Option<SymbolId> {
         let mut scope = self.current_scope.as_ref();
+        let mut depth = 0u32;
         while let Some(s) = scope {
             if let Some(id) = s.locals.get(name) {
                 return Some(id);
+            }
+            depth += 1;
+            if depth > Self::MAX_SCOPE_DEPTH {
+                break;
             }
             scope = s.parent.as_ref();
         }
@@ -874,9 +949,14 @@ impl Binder {
     /// Resolve a name by its text string in the current scope chain.
     pub fn resolve_name(&self, name: &str) -> Option<SymbolId> {
         let mut scope = self.current_scope.as_ref();
+        let mut depth = 0u32;
         while let Some(s) = scope {
             if let Some(&id) = s.names.get(name) {
                 return Some(id);
+            }
+            depth += 1;
+            if depth > Self::MAX_SCOPE_DEPTH {
+                break;
             }
             scope = s.parent.as_ref();
         }
@@ -917,14 +997,38 @@ impl Binder {
     }
 
     fn declare_symbol_with_text(&mut self, name: InternedString, name_text: String, flags: SymbolFlags, declaration: NodeId) -> SymbolId {
-        // Check for existing symbol in current scope for merging (use text-based lookup)
+        // Check for existing symbol in current scope for merging
         if !name_text.is_empty() {
             if let Some(scope) = &self.current_scope {
                 if let Some(&existing_id) = scope.names.get(&name_text) {
-                    let can_merge = if let Some(existing) = self.symbols.get(existing_id.index()) {
-                        (existing.flags.contains(SymbolFlags::INTERFACE) && flags.contains(SymbolFlags::INTERFACE))
-                        || (existing.flags.contains(SymbolFlags::VALUE_MODULE) && flags.contains(SymbolFlags::VALUE_MODULE))
-                    } else { false };
+                    let (can_merge, is_duplicate_block_scoped) = if let Some(existing) = self.symbols.get(existing_id.index()) {
+                        let can_merge =
+                            // Interface declaration merging
+                            (existing.flags.contains(SymbolFlags::INTERFACE) && flags.contains(SymbolFlags::INTERFACE))
+                            // Namespace declaration merging
+                            || (existing.flags.contains(SymbolFlags::VALUE_MODULE) && flags.contains(SymbolFlags::VALUE_MODULE))
+                            // Function overload merging
+                            || (existing.flags.contains(SymbolFlags::FUNCTION) && flags.contains(SymbolFlags::FUNCTION))
+                            // Enum declaration merging
+                            || (existing.flags.intersects(SymbolFlags::ENUM) && flags.intersects(SymbolFlags::ENUM));
+
+                        // Detect duplicate block-scoped declarations (TDZ errors)
+                        let is_dup = existing.flags.contains(SymbolFlags::BLOCK_SCOPED_VARIABLE)
+                            && flags.contains(SymbolFlags::BLOCK_SCOPED_VARIABLE);
+
+                        (can_merge, is_dup)
+                    } else {
+                        (false, false)
+                    };
+
+                    if is_duplicate_block_scoped {
+                        self.diagnostics.add(rscript_diagnostics::Diagnostic::new(
+                            &rscript_diagnostics::messages::DUPLICATE_IDENTIFIER_0,
+                            &[&name_text],
+                        ));
+                        // Return existing symbol anyway
+                        return existing_id;
+                    }
 
                     if can_merge {
                         if let Some(existing) = self.symbols.get_mut(existing_id.index()) {

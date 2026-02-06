@@ -356,7 +356,7 @@ impl Scanner {
         if self.char_at(1) == Some('.') && self.char_at(2) == Some('.') {
             self.pos += 3;
             SyntaxKind::DotDotDotToken
-        } else if self.char_at(1).map_or(false, is_digit) {
+        } else if self.char_at(1).is_some_and(is_digit) {
             self.scan_number()
         } else {
             self.pos += 1;
@@ -373,7 +373,7 @@ impl Scanner {
                 self.pos += 2;
                 SyntaxKind::QuestionQuestionToken
             }
-        } else if self.char_at(1) == Some('.') && !self.char_at(2).map_or(false, is_digit) {
+        } else if self.char_at(1) == Some('.') && !self.char_at(2).is_some_and(is_digit) {
             self.pos += 2;
             SyntaxKind::QuestionDotToken
         } else {
@@ -571,11 +571,32 @@ impl Scanner {
                 break;
             }
             if ch == '\\' {
-                result.push(ch);
-                self.pos += 1;
+                self.pos += 1; // skip backslash
                 if !self.is_eof() {
-                    result.push(self.text[self.pos]);
-                    self.pos += 1;
+                    let esc = self.text[self.pos];
+                    match esc {
+                        'u' => {
+                            self.pos += 1;
+                            self.scan_unicode_escape(&mut result);
+                        }
+                        'x' => {
+                            self.pos += 1;
+                            self.scan_hex_escape(&mut result);
+                        }
+                        'n' => { result.push('\n'); self.pos += 1; }
+                        'r' => { result.push('\r'); self.pos += 1; }
+                        't' => { result.push('\t'); self.pos += 1; }
+                        '0' => { result.push('\0'); self.pos += 1; }
+                        '\'' | '"' | '\\' => { result.push(esc); self.pos += 1; }
+                        _ => {
+                            // Other escapes: just push the escaped char
+                            result.push('\\');
+                            result.push(esc);
+                            self.pos += 1;
+                        }
+                    }
+                } else {
+                    result.push('\\');
                 }
                 continue;
             }
@@ -592,6 +613,74 @@ impl Scanner {
         }
         self.token_value = result;
         SyntaxKind::StringLiteral
+    }
+
+    /// Parse `\uXXXX` (4-digit) or `\u{XXXXX}` (braced) unicode escape sequence.
+    /// Called after `\u` has been consumed.
+    fn scan_unicode_escape(&mut self, result: &mut String) {
+        if !self.is_eof() && self.text[self.pos] == '{' {
+            // Braced form: \u{XXXXX}
+            self.pos += 1;
+            let start = self.pos;
+            while !self.is_eof() && self.text[self.pos] != '}' {
+                self.pos += 1;
+            }
+            let hex_str: String = self.text[start..self.pos].iter().collect();
+            if !self.is_eof() {
+                self.pos += 1; // skip '}'
+            }
+            if let Ok(code) = u32::from_str_radix(&hex_str, 16) {
+                if let Some(ch) = char::from_u32(code) {
+                    result.push(ch);
+                    return;
+                }
+            }
+            // Fallback: emit raw sequence
+            result.push_str("\\u{");
+            result.push_str(&hex_str);
+            result.push('}');
+        } else {
+            // 4-digit form: \uXXXX
+            let start = self.pos;
+            let mut count = 0;
+            while count < 4 && !self.is_eof() && self.text[self.pos].is_ascii_hexdigit() {
+                self.pos += 1;
+                count += 1;
+            }
+            if count == 4 {
+                let hex_str: String = self.text[start..self.pos].iter().collect();
+                if let Ok(code) = u16::from_str_radix(&hex_str, 16) {
+                    if let Some(ch) = char::from_u32(code as u32) {
+                        result.push(ch);
+                        return;
+                    }
+                }
+            }
+            // Fallback: emit raw
+            let raw: String = self.text[start..self.pos].iter().collect();
+            result.push_str("\\u");
+            result.push_str(&raw);
+        }
+    }
+
+    /// Parse `\xXX` hex escape sequence. Called after `\x` has been consumed.
+    fn scan_hex_escape(&mut self, result: &mut String) {
+        let start = self.pos;
+        let mut count = 0;
+        while count < 2 && !self.is_eof() && self.text[self.pos].is_ascii_hexdigit() {
+            self.pos += 1;
+            count += 1;
+        }
+        if count == 2 {
+            let hex_str: String = self.text[start..self.pos].iter().collect();
+            if let Ok(code) = u8::from_str_radix(&hex_str, 16) {
+                result.push(code as char);
+                return;
+            }
+        }
+        let raw: String = self.text[start..self.pos].iter().collect();
+        result.push_str("\\x");
+        result.push_str(&raw);
     }
 
     fn scan_template_literal(&mut self) -> SyntaxKind {
@@ -854,7 +943,7 @@ impl Scanner {
             if ch == '_' {
                 self.token_flags |= TokenFlags::CONTAINS_SEPARATOR;
                 self.pos += 1;
-            } else if ch >= '0' && ch <= '7' {
+            } else if ('0'..='7').contains(&ch) {
                 self.pos += 1;
             } else {
                 break;

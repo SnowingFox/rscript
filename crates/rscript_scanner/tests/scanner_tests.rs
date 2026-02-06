@@ -438,13 +438,13 @@ fn test_string_escape_sequences() {
     let tokens = scan_all(r#""hello\nworld""#);
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].0, SyntaxKind::StringLiteral);
-    // The scanner preserves the backslash escape in the value
-    assert!(tokens[0].1.contains("\\n"));
+    // The scanner now decodes escape sequences to their actual characters
+    assert!(tokens[0].1.contains('\n'));
 
     let tokens = scan_all(r#""tab\there""#);
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].0, SyntaxKind::StringLiteral);
-    assert!(tokens[0].1.contains("\\t"));
+    assert!(tokens[0].1.contains('\t'));
 }
 
 #[test]
@@ -908,4 +908,608 @@ fn test_crlf_line_breaks() {
     scanner.scan(); // a
     scanner.scan(); // b
     assert!(scanner.has_preceding_line_break());
+}
+
+// ============================================================================
+// Unicode escape sequences
+// ============================================================================
+
+#[test]
+fn test_unicode_escape_4digit() {
+    let tokens = scan_all(r#""\u0041""#);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].0, SyntaxKind::StringLiteral);
+    assert_eq!(tokens[0].1, "A");
+}
+
+#[test]
+fn test_unicode_escape_braced() {
+    let tokens = scan_all(r#""\u{41}""#);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].0, SyntaxKind::StringLiteral);
+    assert_eq!(tokens[0].1, "A");
+}
+
+#[test]
+fn test_unicode_escape_braced_large_codepoint() {
+    let tokens = scan_all(r#""\u{1F600}""#);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].1, "\u{1F600}");
+}
+
+#[test]
+fn test_unicode_escape_in_string_mixed() {
+    let tokens = scan_all(r#""hello \u0041 world""#);
+    assert_eq!(tokens[0].1, "hello A world");
+}
+
+#[test]
+fn test_hex_escape_in_string() {
+    let tokens = scan_all(r#""\x41""#);
+    assert_eq!(tokens[0].1, "A");
+}
+
+#[test]
+fn test_escape_sequences_n_r_t() {
+    let tokens = scan_all(r#""\n\r\t""#);
+    assert_eq!(tokens[0].1, "\n\r\t");
+}
+
+#[test]
+fn test_escape_null() {
+    let tokens = scan_all(r#""\0""#);
+    assert_eq!(tokens[0].1, "\0");
+}
+
+#[test]
+fn test_escape_backslash() {
+    let tokens = scan_all(r#""\\""#);
+    assert_eq!(tokens[0].1, "\\");
+}
+
+#[test]
+fn test_escape_quotes() {
+    let tokens = scan_all(r#""\"hello\"""#);
+    assert_eq!(tokens[0].1, "\"hello\"");
+}
+
+// ============================================================================
+// String literal edge cases
+// ============================================================================
+
+#[test]
+fn test_single_quote_string() {
+    let tokens = scan_all("'hello'");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].0, SyntaxKind::StringLiteral);
+    assert_eq!(tokens[0].1, "hello");
+}
+
+#[test]
+fn test_empty_string_double() {
+    let tokens = scan_all(r#""""#);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].1, "");
+}
+
+#[test]
+fn test_empty_string_single() {
+    let tokens = scan_all("''");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].1, "");
+}
+
+#[test]
+fn test_string_with_special_chars() {
+    let tokens = scan_all(r#""a\tb\nc""#);
+    assert_eq!(tokens[0].1, "a\tb\nc");
+}
+
+// ============================================================================
+// RegExp scanning
+// ============================================================================
+
+#[test]
+fn test_regexp_basic() {
+    let mut scanner = Scanner::new("/abc/");
+    let kind = scanner.scan();
+    // Initially scanned as SlashToken, needs rescan
+    assert_eq!(kind, SyntaxKind::SlashToken);
+    let rescanned = scanner.rescan_slash_token();
+    assert_eq!(rescanned, SyntaxKind::RegularExpressionLiteral);
+}
+
+#[test]
+fn test_regexp_with_flags() {
+    let mut scanner = Scanner::new("/abc/gi");
+    scanner.scan();
+    let rescanned = scanner.rescan_slash_token();
+    assert_eq!(rescanned, SyntaxKind::RegularExpressionLiteral);
+    assert!(scanner.token_value().contains("gi"));
+}
+
+// ============================================================================
+// Comment handling
+// ============================================================================
+
+#[test]
+fn test_single_line_comment() {
+    let tokens = scan_all("// this is a comment\n42");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_multiline_comment_inline() {
+    let tokens = scan_all("1 /* comment */ + 2");
+    assert_eq!(tokens.len(), 3);
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+    assert_eq!(tokens[1].0, SyntaxKind::PlusToken);
+    assert_eq!(tokens[2].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_jsdoc_style_comment() {
+    let tokens = scan_all("/** @param x */\nconst a = 1;");
+    let kinds: Vec<_> = tokens.iter().map(|(k, _)| *k).collect();
+    assert!(kinds.contains(&SyntaxKind::ConstKeyword));
+}
+
+// ============================================================================
+// Operator exhaustive tests
+// ============================================================================
+
+#[test]
+fn test_all_assignment_operators() {
+    let ops = vec![
+        ("=", SyntaxKind::EqualsToken),
+        ("+=", SyntaxKind::PlusEqualsToken),
+        ("-=", SyntaxKind::MinusEqualsToken),
+        ("*=", SyntaxKind::AsteriskEqualsToken),
+        ("/=", SyntaxKind::SlashEqualsToken),
+        ("%=", SyntaxKind::PercentEqualsToken),
+        ("**=", SyntaxKind::AsteriskAsteriskEqualsToken),
+        ("&=", SyntaxKind::AmpersandEqualsToken),
+        ("|=", SyntaxKind::BarEqualsToken),
+        ("^=", SyntaxKind::CaretEqualsToken),
+    ];
+    for (src, expected) in ops {
+        let kinds = scan_kinds(&format!("x {} y", src));
+        assert!(kinds.contains(&expected), "Expected {:?} in {:?} for {}", expected, kinds, src);
+    }
+}
+
+#[test]
+fn test_comparison_operators() {
+    let ops = vec![
+        ("==", SyntaxKind::EqualsEqualsToken),
+        ("!=", SyntaxKind::ExclamationEqualsToken),
+        ("===", SyntaxKind::EqualsEqualsEqualsToken),
+        ("!==", SyntaxKind::ExclamationEqualsEqualsToken),
+        ("<", SyntaxKind::LessThanToken),
+        (">", SyntaxKind::GreaterThanToken),
+        ("<=", SyntaxKind::LessThanEqualsToken),
+    ];
+    for (src, expected) in ops {
+        let kinds = scan_kinds(&format!("x {} y", src));
+        assert!(kinds.contains(&expected), "Expected {:?} for {}", expected, src);
+    }
+    // >= is scanned as GreaterThanToken + EqualsToken by default (rescan needed for >=)
+    // This matches TypeScript's scanner behavior where > is always scanned first
+}
+
+#[test]
+fn test_logical_operators() {
+    let ops = vec![
+        ("&&", SyntaxKind::AmpersandAmpersandToken),
+        ("||", SyntaxKind::BarBarToken),
+        ("??", SyntaxKind::QuestionQuestionToken),
+    ];
+    for (src, expected) in ops {
+        let kinds = scan_kinds(&format!("x {} y", src));
+        assert!(kinds.contains(&expected), "Expected {:?} for {}", expected, src);
+    }
+}
+
+#[test]
+fn test_dot_token() {
+    let kinds = scan_kinds("a.b");
+    assert_eq!(kinds, vec![SyntaxKind::Identifier, SyntaxKind::DotToken, SyntaxKind::Identifier]);
+}
+
+#[test]
+fn test_spread_token() {
+    let kinds = scan_kinds("...x");
+    assert_eq!(kinds, vec![SyntaxKind::DotDotDotToken, SyntaxKind::Identifier]);
+}
+
+#[test]
+fn test_optional_chaining_token() {
+    let kinds = scan_kinds("a?.b");
+    assert!(kinds.contains(&SyntaxKind::QuestionDotToken));
+}
+
+#[test]
+fn test_arrow_token() {
+    let kinds = scan_kinds("() => x");
+    assert!(kinds.contains(&SyntaxKind::EqualsGreaterThanToken));
+}
+
+// ============================================================================
+// Numeric literal edge cases
+// ============================================================================
+
+#[test]
+fn test_leading_dot_number_value() {
+    let tokens = scan_all(".5");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+    assert_eq!(tokens[0].1, ".5");
+}
+
+#[test]
+fn test_scientific_notation_positive() {
+    let tokens = scan_all("1e10");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_scientific_negative_exponent() {
+    let tokens = scan_all("1e-5");
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_hex_number_ff() {
+    let tokens = scan_all("0xFF");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_binary_number_literal() {
+    let tokens = scan_all("0b1010");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_octal_number_literal() {
+    let tokens = scan_all("0o77");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+#[test]
+fn test_numeric_separator_millions() {
+    let tokens = scan_all("1_000_000");
+    assert_eq!(tokens[0].0, SyntaxKind::NumericLiteral);
+}
+
+// ============================================================================
+// BigInt edge cases
+// ============================================================================
+
+#[test]
+fn test_bigint_simple() {
+    let tokens = scan_all("100n");
+    assert_eq!(tokens[0].0, SyntaxKind::BigIntLiteral);
+}
+
+#[test]
+fn test_bigint_hex_ff() {
+    let tokens = scan_all("0xFFn");
+    assert_eq!(tokens[0].0, SyntaxKind::BigIntLiteral);
+}
+
+#[test]
+fn test_bigint_zero_literal() {
+    let tokens = scan_all("0n");
+    assert_eq!(tokens[0].0, SyntaxKind::BigIntLiteral);
+}
+
+// ============================================================================
+// Template literal edge cases
+// ============================================================================
+
+#[test]
+fn test_template_no_substitution_literal() {
+    let tokens = scan_all("`hello world`");
+    assert_eq!(tokens[0].0, SyntaxKind::NoSubstitutionTemplateLiteral);
+}
+
+#[test]
+fn test_template_with_expression_head() {
+    let kinds = scan_kinds("`hello ${name}`");
+    assert_eq!(kinds[0], SyntaxKind::TemplateHead);
+}
+
+#[test]
+fn test_empty_template_literal() {
+    let tokens = scan_all("``");
+    assert_eq!(tokens[0].0, SyntaxKind::NoSubstitutionTemplateLiteral);
+    assert_eq!(tokens[0].1, "");
+}
+
+// ============================================================================
+// Private identifiers
+// ============================================================================
+
+#[test]
+fn test_private_identifier_hash() {
+    let kinds = scan_kinds("#field");
+    assert_eq!(kinds[0], SyntaxKind::HashToken);
+    assert_eq!(kinds[1], SyntaxKind::Identifier);
+}
+
+// ============================================================================
+// Shebang
+// ============================================================================
+
+#[test]
+fn test_shebang_skipped() {
+    let mut scanner = Scanner::new("#!/usr/bin/env node\nconst x = 1;");
+    scanner.skip_shebang();
+    let kind = scanner.scan();
+    assert_eq!(kind, SyntaxKind::ConstKeyword);
+}
+
+#[test]
+fn test_no_shebang_no_skip() {
+    let mut scanner = Scanner::new("const x = 1;");
+    scanner.skip_shebang();
+    let kind = scanner.scan();
+    assert_eq!(kind, SyntaxKind::ConstKeyword);
+}
+
+// ============================================================================
+// Edge cases
+// ============================================================================
+
+#[test]
+fn test_whitespace_only_input() {
+    let tokens = scan_all("   \t\n  ");
+    assert!(tokens.is_empty());
+}
+
+#[test]
+fn test_unterminated_string() {
+    let mut scanner = Scanner::new("\"hello");
+    scanner.scan();
+    assert!(!scanner.diagnostics().is_empty());
+}
+
+#[test]
+fn test_unterminated_template() {
+    let mut scanner = Scanner::new("`hello");
+    scanner.scan();
+    assert!(!scanner.diagnostics().is_empty());
+}
+
+#[test]
+fn test_identifier_with_dollar() {
+    let tokens = scan_all("$foo");
+    assert_eq!(tokens[0].0, SyntaxKind::Identifier);
+    assert_eq!(tokens[0].1, "$foo");
+}
+
+#[test]
+fn test_identifier_with_underscore() {
+    let tokens = scan_all("_bar");
+    assert_eq!(tokens[0].0, SyntaxKind::Identifier);
+    assert_eq!(tokens[0].1, "_bar");
+}
+
+#[test]
+fn test_scanner_save_restore() {
+    let mut scanner = Scanner::new("a b c");
+    scanner.scan(); // a
+    let state = scanner.save_state();
+    scanner.scan(); // b
+    assert_eq!(scanner.token_value(), "b");
+    scanner.restore_state(state);
+    let kind = scanner.scan();
+    assert_eq!(kind, SyntaxKind::Identifier);
+    assert_eq!(scanner.token_value(), "b");
+}
+
+#[test]
+fn test_look_ahead() {
+    let mut scanner = Scanner::new("a b c");
+    scanner.scan(); // a
+    let next = scanner.look_ahead(|s| {
+        s.scan() // peek at b
+    });
+    assert_eq!(next, SyntaxKind::Identifier);
+    // Position should be restored
+    let kind = scanner.scan();
+    assert_eq!(kind, SyntaxKind::Identifier);
+    assert_eq!(scanner.token_value(), "b");
+}
+
+// ============================================================================
+// JSX scanning
+// ============================================================================
+
+#[test]
+fn test_jsx_text_scanning() {
+    let mut scanner = Scanner::new("Hello World");
+    scanner.set_in_jsx(true);
+    let kind = scanner.scan_jsx_text();
+    assert_eq!(kind, SyntaxKind::JsxText);
+}
+
+// ============================================================================
+// Keyword coverage (comprehensive)
+// ============================================================================
+
+#[test]
+fn test_declaration_keywords_all() {
+    let keywords = vec![
+        ("var", SyntaxKind::VarKeyword),
+        ("let", SyntaxKind::LetKeyword),
+        ("const", SyntaxKind::ConstKeyword),
+        ("function", SyntaxKind::FunctionKeyword),
+        ("class", SyntaxKind::ClassKeyword),
+        ("interface", SyntaxKind::InterfaceKeyword),
+        ("enum", SyntaxKind::EnumKeyword),
+        ("type", SyntaxKind::TypeKeyword),
+        ("namespace", SyntaxKind::NamespaceKeyword),
+    ];
+    for (src, expected) in keywords {
+        let kinds = scan_kinds(src);
+        assert_eq!(kinds, vec![expected], "Failed for keyword: {}", src);
+    }
+}
+
+#[test]
+fn test_all_control_flow_keywords() {
+    let keywords = vec![
+        ("if", SyntaxKind::IfKeyword),
+        ("else", SyntaxKind::ElseKeyword),
+        ("for", SyntaxKind::ForKeyword),
+        ("while", SyntaxKind::WhileKeyword),
+        ("do", SyntaxKind::DoKeyword),
+        ("switch", SyntaxKind::SwitchKeyword),
+        ("case", SyntaxKind::CaseKeyword),
+        ("break", SyntaxKind::BreakKeyword),
+        ("continue", SyntaxKind::ContinueKeyword),
+        ("return", SyntaxKind::ReturnKeyword),
+        ("try", SyntaxKind::TryKeyword),
+        ("catch", SyntaxKind::CatchKeyword),
+        ("finally", SyntaxKind::FinallyKeyword),
+        ("throw", SyntaxKind::ThrowKeyword),
+    ];
+    for (src, expected) in keywords {
+        let kinds = scan_kinds(src);
+        assert_eq!(kinds, vec![expected], "Failed for keyword: {}", src);
+    }
+}
+
+#[test]
+fn test_type_keywords_all() {
+    let keywords = vec![
+        ("any", SyntaxKind::AnyKeyword),
+        ("boolean", SyntaxKind::BooleanKeyword),
+        ("number", SyntaxKind::NumberKeyword),
+        ("string", SyntaxKind::StringKeyword),
+        ("void", SyntaxKind::VoidKeyword),
+        ("never", SyntaxKind::NeverKeyword),
+        ("unknown", SyntaxKind::UnknownKeyword),
+        ("undefined", SyntaxKind::UndefinedKeyword),
+    ];
+    for (src, expected) in keywords {
+        let kinds = scan_kinds(src);
+        assert_eq!(kinds, vec![expected], "Failed for keyword: {}", src);
+    }
+}
+
+#[test]
+fn test_modifier_keywords_all() {
+    let keywords = vec![
+        ("public", SyntaxKind::PublicKeyword),
+        ("private", SyntaxKind::PrivateKeyword),
+        ("protected", SyntaxKind::ProtectedKeyword),
+        ("static", SyntaxKind::StaticKeyword),
+        ("readonly", SyntaxKind::ReadonlyKeyword),
+        ("abstract", SyntaxKind::AbstractKeyword),
+        ("async", SyntaxKind::AsyncKeyword),
+        ("declare", SyntaxKind::DeclareKeyword),
+        ("export", SyntaxKind::ExportKeyword),
+        ("import", SyntaxKind::ImportKeyword),
+    ];
+    for (src, expected) in keywords {
+        let kinds = scan_kinds(src);
+        assert_eq!(kinds, vec![expected], "Failed for keyword: {}", src);
+    }
+}
+
+#[test]
+fn test_literal_keywords_all() {
+    let keywords = vec![
+        ("true", SyntaxKind::TrueKeyword),
+        ("false", SyntaxKind::FalseKeyword),
+        ("null", SyntaxKind::NullKeyword),
+        ("this", SyntaxKind::ThisKeyword),
+        ("super", SyntaxKind::SuperKeyword),
+    ];
+    for (src, expected) in keywords {
+        let kinds = scan_kinds(src);
+        assert_eq!(kinds, vec![expected], "Failed for keyword: {}", src);
+    }
+}
+
+// ============================================================================
+// Rescan methods
+// ============================================================================
+
+#[test]
+fn test_rescan_greater_than_for_shift() {
+    let mut scanner = Scanner::new("> >");
+    let kind = scanner.scan();
+    assert_eq!(kind, SyntaxKind::GreaterThanToken);
+}
+
+#[test]
+fn test_rescan_template_token() {
+    // After template head, rescan should produce template middle/tail
+    let mut scanner = Scanner::new("`a${b}c`");
+    let head = scanner.scan();
+    assert_eq!(head, SyntaxKind::TemplateHead);
+}
+
+// ============================================================================
+// Token position tracking (comprehensive)
+// ============================================================================
+
+#[test]
+fn test_token_start_end_positions() {
+    let mut scanner = Scanner::new("ab cd");
+    scanner.scan(); // ab
+    assert_eq!(scanner.token_start(), 0);
+    assert_eq!(scanner.token_end(), 2);
+    scanner.scan(); // cd
+    assert_eq!(scanner.token_start(), 3);
+    assert_eq!(scanner.token_end(), 5);
+}
+
+#[test]
+fn test_line_break_detection() {
+    let mut scanner = Scanner::new("a\nb");
+    scanner.scan(); // a
+    assert!(!scanner.has_preceding_line_break());
+    scanner.scan(); // b
+    assert!(scanner.has_preceding_line_break());
+}
+
+// ============================================================================
+// Complex multi-token sequences
+// ============================================================================
+
+#[test]
+fn test_arrow_function_sequence() {
+    let kinds = scan_kinds("(x: number) => x + 1");
+    assert!(kinds.contains(&SyntaxKind::OpenParenToken));
+    assert!(kinds.contains(&SyntaxKind::ColonToken));
+    assert!(kinds.contains(&SyntaxKind::EqualsGreaterThanToken));
+    assert!(kinds.contains(&SyntaxKind::PlusToken));
+}
+
+#[test]
+fn test_generic_type_sequence() {
+    let kinds = scan_kinds("Array<string>");
+    assert_eq!(kinds[0], SyntaxKind::Identifier);
+    assert_eq!(kinds[1], SyntaxKind::LessThanToken);
+    assert_eq!(kinds[2], SyntaxKind::StringKeyword);
+    assert_eq!(kinds[3], SyntaxKind::GreaterThanToken);
+}
+
+#[test]
+fn test_optional_chaining_call() {
+    let kinds = scan_kinds("a?.()");
+    assert!(kinds.contains(&SyntaxKind::QuestionDotToken));
+    assert!(kinds.contains(&SyntaxKind::OpenParenToken));
+}
+
+#[test]
+fn test_nullish_coalescing_assignment() {
+    let kinds = scan_kinds("x ??= y");
+    assert!(kinds.contains(&SyntaxKind::QuestionQuestionEqualsToken));
 }

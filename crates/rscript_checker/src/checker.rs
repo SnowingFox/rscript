@@ -165,12 +165,17 @@ impl Checker {
     }
 
     fn check_variable_statement(&mut self, node: &VariableStatement<'_>) {
+        let is_const = node.declaration_list.data.flags.contains(NodeFlags::CONST);
         for decl in node.declaration_list.declarations.iter() {
-            self.check_variable_declaration(decl);
+            self.check_variable_declaration_with_const(decl, is_const);
         }
     }
 
     fn check_variable_declaration(&mut self, decl: &VariableDeclaration<'_>) {
+        self.check_variable_declaration_with_const(decl, false);
+    }
+
+    fn check_variable_declaration_with_const(&mut self, decl: &VariableDeclaration<'_>, is_const: bool) {
         let declared_type = if decl.type_annotation.is_some() {
             self.get_type_from_type_annotation(decl.type_annotation)
         } else {
@@ -202,8 +207,14 @@ impl Checker {
                 }
             } else {
                 // Infer type from initializer
+                // For `const` declarations without type annotation, narrow to literal types
+                let inferred = if is_const && declared_type.is_none() {
+                    self.narrow_to_literal(init, init_type)
+                } else {
+                    init_type
+                };
                 if let Some(ref name) = var_name {
-                    self.register_type(name, init_type);
+                    self.register_type(name, inferred);
                 }
             }
         } else if let Some(declared) = declared_type {
@@ -328,7 +339,7 @@ impl Checker {
 
     fn check_class_declaration(&mut self, node: &ClassDeclaration<'_>) {
         // Check heritage
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 for ty in clause.types.iter() {
                     self.check_expression(ty.expression);
@@ -446,8 +457,35 @@ impl Checker {
             }
         }
 
-        // Register the class type
+        // Build the instance type first, then set construct signature return types
         if let Some(ref name) = node.name {
+            let instance_type = self.type_table.add_type(
+                TypeFlags::OBJECT,
+                TypeKind::ObjectType {
+                    object_flags: ObjectFlags::INTERFACE,
+                    members: class_members.clone(),
+                    call_signatures: vec![],
+                    construct_signatures: vec![],
+                    index_infos: vec![],
+                },
+            );
+
+            // Update construct signatures to return the instance type
+            for sig in &mut construct_sigs {
+                sig.return_type = instance_type;
+            }
+
+            // If no explicit constructor, add a default one
+            if construct_sigs.is_empty() {
+                construct_sigs.push(Signature {
+                    type_parameters: vec![],
+                    parameters: vec![],
+                    return_type: instance_type,
+                    min_argument_count: 0,
+                    has_rest_parameter: false,
+                });
+            }
+
             let class_type = self.type_table.add_type(
                 TypeFlags::OBJECT,
                 TypeKind::ObjectType {
@@ -514,8 +552,7 @@ impl Checker {
     }
 
     fn check_enum_declaration(&mut self, node: &EnumDeclaration<'_>) {
-        let mut _auto_value: i64 = 0;
-        for member in node.members.iter() {
+        for (_auto_index, member) in node.members.iter().enumerate() {
             if let Some(init) = member.initializer {
                 let init_type = self.check_expression(init);
                 let ty = self.type_table.get(init_type);
@@ -523,7 +560,6 @@ impl Checker {
                     // Enum initializer must be number or string
                 }
             }
-            _auto_value += 1;
         }
     }
 
@@ -594,7 +630,7 @@ impl Checker {
                 TypeElement::MethodSignature(method) => {
                     let method_name = self.get_property_name_text(&method.name);
                     let method_type = self.build_method_type(
-                        &method.parameters,
+                        method.parameters,
                         method.return_type,
                         method.question_token.is_some(),
                     );
@@ -606,11 +642,11 @@ impl Checker {
                     }
                 }
                 TypeElement::CallSignature(call) => {
-                    let sig = self.build_signature(&call.parameters, call.return_type);
+                    let sig = self.build_signature(call.parameters, call.return_type);
                     call_signatures.push(sig);
                 }
                 TypeElement::ConstructSignature(ctor) => {
-                    let sig = self.build_signature(&ctor.parameters, ctor.return_type);
+                    let sig = self.build_signature(ctor.parameters, ctor.return_type);
                     construct_signatures.push(sig);
                 }
                 TypeElement::IndexSignature(idx) => {
@@ -634,7 +670,7 @@ impl Checker {
         }
 
         // Resolve heritage clauses (extends)
-        if let Some(ref heritage) = node.heritage_clauses {
+        if let Some(heritage) = node.heritage_clauses {
             for clause in heritage.iter() {
                 for expr_with_args in clause.types.iter() {
                     // Resolve the base type from the expression
@@ -1117,7 +1153,7 @@ impl Checker {
     fn check_new_expression(&mut self, node: &NewExpression<'_>) -> TypeId {
         let class_type = self.check_expression(node.expression);
         let mut arg_types = Vec::new();
-        if let Some(ref args) = node.arguments {
+        if let Some(args) = node.arguments {
             for arg in args.iter() {
                 arg_types.push(self.check_expression(arg));
             }
@@ -1514,7 +1550,7 @@ impl Checker {
                 // Check well-known type names
                 match ref_name.as_str() {
                     "Array" => {
-                        let elem_type = if let Some(ref type_args) = n.type_arguments {
+                        let elem_type = if let Some(type_args) = n.type_arguments {
                             if !type_args.is_empty() {
                                 self.get_type_from_type_node(&type_args[0])
                             } else {
@@ -1526,7 +1562,7 @@ impl Checker {
                         return self.create_array_type(elem_type);
                     }
                     "ReadonlyArray" => {
-                        let elem_type = if let Some(ref type_args) = n.type_arguments {
+                        let elem_type = if let Some(type_args) = n.type_arguments {
                             if !type_args.is_empty() {
                                 self.get_type_from_type_node(&type_args[0])
                             } else {
@@ -1538,7 +1574,7 @@ impl Checker {
                         return self.create_array_type(elem_type);
                     }
                     "Promise" => {
-                        let _inner = if let Some(ref type_args) = n.type_arguments {
+                        let _inner = if let Some(type_args) = n.type_arguments {
                             if !type_args.is_empty() {
                                 self.get_type_from_type_node(&type_args[0])
                             } else {
@@ -1560,11 +1596,83 @@ impl Checker {
                         );
                     }
                     "Record" => return self.type_table.any_type,
-                    "Partial" | "Required" | "Readonly" | "Pick" | "Omit" | "Exclude" | "Extract"
-                    | "NonNullable" | "ReturnType" | "Parameters" | "InstanceType" | "ConstructorParameters"
+                    "Partial" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.create_partial_type(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Required" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.create_required_type(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Readonly" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.create_readonly_type(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Pick" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if type_args.len() >= 2 {
+                                let base = self.get_type_from_type_node(&type_args[0]);
+                                let keys_type = self.get_type_from_type_node(&type_args[1]);
+                                return self.create_pick_type(base, &[keys_type]);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Omit" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if type_args.len() >= 2 {
+                                let base = self.get_type_from_type_node(&type_args[0]);
+                                let keys_type = self.get_type_from_type_node(&type_args[1]);
+                                return self.create_omit_type(base, &[keys_type]);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "ReturnType" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.get_return_type_of(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Parameters" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.get_parameters_type_of(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "NonNullable" => {
+                        if let Some(type_args) = n.type_arguments {
+                            if !type_args.is_empty() {
+                                let inner = self.get_type_from_type_node(&type_args[0]);
+                                return self.get_non_nullable_type(inner);
+                            }
+                        }
+                        return self.type_table.any_type;
+                    }
+                    "Exclude" | "Extract" | "InstanceType" | "ConstructorParameters"
                     | "ThisParameterType" | "OmitThisParameter" | "Uppercase" | "Lowercase"
                     | "Capitalize" | "Uncapitalize" => {
-                        // Utility types — simplified to any
                         return self.type_table.any_type;
                     }
                     _ => {}
@@ -1658,6 +1766,20 @@ impl Checker {
                 let extends = self.get_type_from_type_node(n.extends_type);
                 let true_type = self.get_type_from_type_node(n.true_type);
                 let false_type = self.get_type_from_type_node(n.false_type);
+
+                // If check and extends are concrete, evaluate immediately
+                let check_flags = self.type_table.get(check).flags;
+                let extends_flags = self.type_table.get(extends).flags;
+                let is_concrete = |f: TypeFlags| {
+                    f.intersects(TypeFlags::STRING | TypeFlags::NUMBER | TypeFlags::BOOLEAN |
+                        TypeFlags::NULL | TypeFlags::UNDEFINED | TypeFlags::VOID |
+                        TypeFlags::NEVER | TypeFlags::STRING_LITERAL | TypeFlags::NUMBER_LITERAL |
+                        TypeFlags::BOOLEAN_LITERAL | TypeFlags::OBJECT)
+                };
+                if is_concrete(check_flags) && is_concrete(extends_flags) {
+                    return self.evaluate_conditional_type(check, extends, true_type, false_type);
+                }
+
                 self.type_table.add_type(
                     TypeFlags::CONDITIONAL,
                     TypeKind::Conditional { check_type: check, extends_type: extends, true_type, false_type },
@@ -1666,6 +1788,11 @@ impl Checker {
             TypeNode::IndexedAccessType(n) => {
                 let obj = self.get_type_from_type_node(n.object_type);
                 let idx = self.get_type_from_type_node(n.index_type);
+                // Try to resolve the indexed access immediately
+                let resolved = self.resolve_indexed_access(obj, idx);
+                if resolved != self.type_table.any_type {
+                    return resolved;
+                }
                 self.type_table.add_type(
                     TypeFlags::INDEXED_ACCESS,
                     TypeKind::IndexedAccess { object_type: obj, index_type: idx },
@@ -1675,8 +1802,20 @@ impl Checker {
                 let operand = self.get_type_from_type_node(n.type_node);
                 match n.operator {
                     SyntaxKind::KeyOfKeyword => {
-                        let _ = operand;
-                        self.create_union_type(vec![self.type_table.string_type, self.type_table.number_type, self.type_table.symbol_type])
+                        // Extract member names from the operand type and create a union of string literal types
+                        let member_names = self.get_object_member_names(operand);
+                        if member_names.is_empty() {
+                            // Fallback: string | number | symbol
+                            self.create_union_type(vec![self.type_table.string_type, self.type_table.number_type, self.type_table.symbol_type])
+                        } else {
+                            let literal_types: Vec<TypeId> = member_names.iter().map(|name| {
+                                self.type_table.add_type(
+                                    TypeFlags::STRING_LITERAL,
+                                    TypeKind::StringLiteral { value: name.clone(), regular: true },
+                                )
+                            }).collect();
+                            self.create_union_type(literal_types)
+                        }
                     }
                     SyntaxKind::ReadonlyKeyword => operand,
                     SyntaxKind::UniqueKeyword => self.type_table.symbol_type,
@@ -1724,7 +1863,14 @@ impl Checker {
                 }
             }
             TypeNode::ThisType(_) => self.type_table.any_type,
-            TypeNode::TypeQuery(_) => self.type_table.any_type,
+            TypeNode::TypeQuery(n) => {
+                // typeof expr — resolve the expression name to its declared type
+                let name = match &n.expr_name {
+                    EntityName::Identifier(id) => id.text_name.clone(),
+                    EntityName::QualifiedName(q) => q.right.text_name.clone(),
+                };
+                self.get_declared_type(&name).unwrap_or(self.type_table.any_type)
+            }
             TypeNode::InferType(_) => self.type_table.any_type,
             TypeNode::MappedType(_) => self.type_table.any_type,
             TypeNode::TemplateLiteralType(_) => self.type_table.string_type,
@@ -1946,11 +2092,10 @@ impl Checker {
         if source_flags.contains(TypeFlags::NEVER) { return true; }
 
         // null/undefined assignability
-        if !self.strict_null_checks {
-            if source_flags.contains(TypeFlags::NULL) || source_flags.contains(TypeFlags::UNDEFINED) {
+        if !self.strict_null_checks
+            && (source_flags.contains(TypeFlags::NULL) || source_flags.contains(TypeFlags::UNDEFINED)) {
                 return true;
             }
-        }
 
         // Union target: source must be assignable to at least one constituent.
         // Clone the types vec to release the borrow before recursive calls.
@@ -1987,8 +2132,8 @@ impl Checker {
         if source_flags.contains(TypeFlags::VOID) && target_flags.contains(TypeFlags::VOID) { return true; }
 
         // Structural type checking for object types.
-        // Extract (source_prop, target_prop) pairs into a local vec,
-        // then drop borrows before making recursive is_type_assignable_to calls.
+        // Build a HashMap from source members for O(1) property lookup per
+        // target member (previously O(n*m) via linear search).
         let member_pairs: Option<Vec<(TypeId, TypeId)>> = {
             let source_type = self.type_table.get(source);
             let target_type = self.type_table.get(target);
@@ -1997,11 +2142,14 @@ impl Checker {
                     TypeKind::ObjectType { members: source_members, .. },
                     TypeKind::ObjectType { members: target_members, .. },
                 ) => {
+                    let source_map: HashMap<&str, TypeId> = source_members
+                        .iter()
+                        .map(|(name, tid)| (name.as_str(), *tid))
+                        .collect();
                     let mut pairs = Vec::new();
                     for (target_name, target_prop_type) in target_members {
-                        let found = source_members.iter().find(|(name, _)| name == target_name);
-                        if let Some((_, source_prop_type)) = found {
-                            pairs.push((*source_prop_type, *target_prop_type));
+                        if let Some(&source_prop_type) = source_map.get(target_name.as_str()) {
+                            pairs.push((source_prop_type, *target_prop_type));
                         } else {
                             // Missing property — not assignable
                             return false;
@@ -2023,6 +2171,264 @@ impl Checker {
         }
 
         false
+    }
+
+    // ========================================================================
+    // Advanced type operations
+    // ========================================================================
+
+    /// For const declarations, narrow the inferred type to a literal type when possible.
+    /// Since StringLiteral and NumericLiteral use InternedString (which requires the interner
+    /// to resolve back to text), we narrow booleans directly and keep the widened type for
+    /// strings/numbers. Full literal narrowing will require threading the interner through.
+    fn narrow_to_literal(&mut self, expr: &Expression<'_>, inferred: TypeId) -> TypeId {
+        match expr {
+            Expression::TrueKeyword(_) => self.type_table.true_type,
+            Expression::FalseKeyword(_) => self.type_table.false_type,
+            Expression::NullKeyword(_) => self.type_table.null_type,
+            _ => inferred,
+        }
+    }
+
+    /// Extract member names from an object type.
+    fn get_object_member_names(&self, type_id: TypeId) -> Vec<String> {
+        let ty = self.type_table.get(type_id);
+        match &ty.kind {
+            TypeKind::ObjectType { members, .. } => {
+                members.iter().map(|(name, _)| name.clone()).collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Evaluate a conditional type when check and extends types are concrete.
+    fn evaluate_conditional_type(&mut self, check: TypeId, extends: TypeId, true_type: TypeId, false_type: TypeId) -> TypeId {
+        if self.is_type_assignable_to(check, extends) {
+            true_type
+        } else {
+            false_type
+        }
+    }
+
+    /// Resolve an indexed access type T[K] — look up property K in T.
+    fn resolve_indexed_access(&self, object_type: TypeId, index_type: TypeId) -> TypeId {
+        let obj = self.type_table.get(object_type);
+        let idx = self.type_table.get(index_type);
+
+        // If index is a string literal, look up the property
+        if let TypeKind::StringLiteral { value, .. } = &idx.kind {
+            if let TypeKind::ObjectType { members, .. } = &obj.kind {
+                for (name, tid) in members {
+                    if name == value {
+                        return *tid;
+                    }
+                }
+            }
+        }
+
+        // Check index signatures
+        if let TypeKind::ObjectType { index_infos, .. } = &obj.kind {
+            for info in index_infos {
+                if self.type_table.get(info.key_type).flags.contains(self.type_table.get(index_type).flags) {
+                    return info.type_id;
+                }
+            }
+        }
+
+        self.type_table.any_type
+    }
+
+    /// Create a literal string type.
+    #[allow(dead_code)]
+    fn create_string_literal_type(&mut self, value: String) -> TypeId {
+        self.type_table.add_type(
+            TypeFlags::STRING_LITERAL,
+            TypeKind::StringLiteral { value, regular: false },
+        )
+    }
+
+    /// Create a literal number type.
+    #[allow(dead_code)]
+    fn create_number_literal_type(&mut self, value: f64) -> TypeId {
+        self.type_table.add_type(
+            TypeFlags::NUMBER_LITERAL,
+            TypeKind::NumberLiteral { value },
+        )
+    }
+
+    /// Implement Partial<T> — make all properties optional (add undefined to each member type).
+    fn create_partial_type(&mut self, type_id: TypeId) -> TypeId {
+        let members = {
+            let ty = self.type_table.get(type_id);
+            if let TypeKind::ObjectType { members, .. } = &ty.kind {
+                members.clone()
+            } else {
+                return type_id;
+            }
+        };
+        let partial_members: Vec<(String, TypeId)> = members.iter().map(|(name, tid)| {
+            let optional = self.create_union_type(vec![*tid, self.type_table.undefined_type]);
+            (name.clone(), optional)
+        }).collect();
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::ANONYMOUS,
+                members: partial_members,
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        )
+    }
+
+    /// Implement Required<T> — remove undefined from all member types.
+    fn create_required_type(&mut self, type_id: TypeId) -> TypeId {
+        let members = {
+            let ty = self.type_table.get(type_id);
+            if let TypeKind::ObjectType { members, .. } = &ty.kind {
+                members.clone()
+            } else {
+                return type_id;
+            }
+        };
+        let required_members: Vec<(String, TypeId)> = members.iter().map(|(name, tid)| {
+            let non_null = self.get_non_nullable_type(*tid);
+            (name.clone(), non_null)
+        }).collect();
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::ANONYMOUS,
+                members: required_members,
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        )
+    }
+
+    /// Implement Readonly<T> — keep all members but mark object as immutable.
+    fn create_readonly_type(&mut self, type_id: TypeId) -> TypeId {
+        let ty = self.type_table.get(type_id);
+        if let TypeKind::ObjectType { members, call_signatures, construct_signatures, index_infos, .. } = &ty.kind {
+            let members = members.clone();
+            let call_signatures = call_signatures.clone();
+            let construct_signatures = construct_signatures.clone();
+            let index_infos = index_infos.clone();
+            self.type_table.add_type(
+                TypeFlags::OBJECT,
+                TypeKind::ObjectType {
+                    object_flags: ObjectFlags::ANONYMOUS,
+                    members,
+                    call_signatures,
+                    construct_signatures,
+                    index_infos,
+                },
+            )
+        } else {
+            type_id
+        }
+    }
+
+    /// Implement Pick<T, K> — select only the specified keys.
+    fn create_pick_type(&mut self, type_id: TypeId, keys: &[TypeId]) -> TypeId {
+        let members = {
+            let ty = self.type_table.get(type_id);
+            if let TypeKind::ObjectType { members, .. } = &ty.kind {
+                members.clone()
+            } else {
+                return type_id;
+            }
+        };
+        let key_names: Vec<String> = keys.iter().filter_map(|k| {
+            if let TypeKind::StringLiteral { value, .. } = &self.type_table.get(*k).kind {
+                Some(value.clone())
+            } else {
+                None
+            }
+        }).collect();
+        let picked: Vec<(String, TypeId)> = members.iter()
+            .filter(|(name, _)| key_names.contains(name))
+            .cloned()
+            .collect();
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::ANONYMOUS,
+                members: picked,
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        )
+    }
+
+    /// Implement Omit<T, K> — remove the specified keys.
+    fn create_omit_type(&mut self, type_id: TypeId, keys: &[TypeId]) -> TypeId {
+        let members = {
+            let ty = self.type_table.get(type_id);
+            if let TypeKind::ObjectType { members, .. } = &ty.kind {
+                members.clone()
+            } else {
+                return type_id;
+            }
+        };
+        let key_names: Vec<String> = keys.iter().filter_map(|k| {
+            if let TypeKind::StringLiteral { value, .. } = &self.type_table.get(*k).kind {
+                Some(value.clone())
+            } else {
+                None
+            }
+        }).collect();
+        let omitted: Vec<(String, TypeId)> = members.iter()
+            .filter(|(name, _)| !key_names.contains(name))
+            .cloned()
+            .collect();
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::ANONYMOUS,
+                members: omitted,
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        )
+    }
+
+    /// Implement ReturnType<T> — extract the return type of a function type.
+    fn get_return_type_of(&self, type_id: TypeId) -> TypeId {
+        let ty = self.type_table.get(type_id);
+        if let TypeKind::ObjectType { call_signatures, .. } = &ty.kind {
+            if let Some(sig) = call_signatures.first() {
+                return sig.return_type;
+            }
+        }
+        self.type_table.any_type
+    }
+
+    /// Implement Parameters<T> — extract the parameter types of a function type as a tuple.
+    fn get_parameters_type_of(&mut self, type_id: TypeId) -> TypeId {
+        let params = {
+            let ty = self.type_table.get(type_id);
+            if let TypeKind::ObjectType { call_signatures, .. } = &ty.kind {
+                if let Some(sig) = call_signatures.first() {
+                    sig.parameters.iter().map(|p| p.type_id).collect::<Vec<_>>()
+                } else {
+                    return self.type_table.any_type;
+                }
+            } else {
+                return self.type_table.any_type;
+            }
+        };
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::Tuple {
+                element_types: params,
+                element_flags: vec![],
+            },
+        )
     }
 }
 

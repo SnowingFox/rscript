@@ -250,6 +250,10 @@ bitflags::bitflags! {
         const TRANSIENT                     = 1 << 25;
         const ASSIGNMENT                    = 1 << 26;
         const MODULE_EXPORTS                = 1 << 27;
+        /// Visibility and modifier flags on symbols (mirror of ModifierFlags for binder use).
+        const PRIVATE                       = 1 << 28;
+        const PROTECTED                     = 1 << 29;
+        const STATIC                        = 1 << 30;
 
         const ENUM = Self::REGULAR_ENUM.bits() | Self::CONST_ENUM.bits();
         const VARIABLE = Self::FUNCTION_SCOPED_VARIABLE.bits() | Self::BLOCK_SCOPED_VARIABLE.bits();
@@ -306,7 +310,7 @@ bitflags::bitflags! {
     }
 }
 
-/// Token flags from the scanner.
+// Token flags from the scanner.
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct TokenFlags: u16 {
@@ -335,7 +339,7 @@ bitflags::bitflags! {
     }
 }
 
-/// Flow node flags for control flow analysis.
+// Flow node flags for control flow analysis.
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct FlowFlags: u16 {

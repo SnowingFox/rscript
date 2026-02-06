@@ -1,6 +1,8 @@
 //! Character code constants used by the scanner.
 //! Matches TypeScript's CharacterCodes enum.
 
+#![allow(dead_code)]
+
 // ASCII control characters
 pub const NULL_CHARACTER: char = '\0';
 pub const MAX_ASCII_CHARACTER: u32 = 0x7F;
@@ -103,17 +105,17 @@ pub fn is_white_space_single_line(ch: char) -> bool {
 /// Check if a character is a decimal digit.
 #[inline]
 pub fn is_digit(ch: char) -> bool {
-    ch >= '0' && ch <= '9'
+    ('0'..='9').contains(&ch)
 }
 
 /// Check if a character is an octal digit (0-7).
 #[inline]
 pub fn is_octal_digit(ch: char) -> bool {
-    ch >= '0' && ch <= '7'
+    ('0'..='7').contains(&ch)
 }
 
 /// Check if a character is a hex digit.
 #[inline]
 pub fn is_hex_digit(ch: char) -> bool {
-    (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+    ('0'..='9').contains(&ch) || ('a'..='f').contains(&ch) || ('A'..='F').contains(&ch)
 }

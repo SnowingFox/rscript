@@ -55,9 +55,8 @@ fn test_compile_class() {
             }
         }
     "#;
-    let count = compile_source(src);
+    let _count = compile_source(src);
     // Just ensure it doesn't panic; exact diagnostic count depends on checker depth
-    assert!(count >= 0);
 }
 
 // ============================================================================
@@ -84,44 +83,38 @@ fn test_compile_multiple_files() {
 #[test]
 fn test_compile_basic_fixture() {
     let source = include_str!("../../../tests/fixtures/basic.ts");
-    let count = compile_source(source);
+    let _count = compile_source(source);
     // Should compile without panicking
-    assert!(count >= 0);
 }
 
 #[test]
 fn test_compile_types_fixture() {
     let source = include_str!("../../../tests/fixtures/types.ts");
-    let count = compile_source(source);
-    assert!(count >= 0);
+    let _count = compile_source(source);
 }
 
 #[test]
 fn test_compile_classes_fixture() {
     let source = include_str!("../../../tests/fixtures/classes.ts");
-    let count = compile_source(source);
-    assert!(count >= 0);
+    let _count = compile_source(source);
 }
 
 #[test]
 fn test_compile_generics_fixture() {
     let source = include_str!("../../../tests/fixtures/generics.ts");
-    let count = compile_source(source);
-    assert!(count >= 0);
+    let _count = compile_source(source);
 }
 
 #[test]
 fn test_compile_modules_fixture() {
     let source = include_str!("../../../tests/fixtures/modules.ts");
-    let count = compile_source(source);
-    assert!(count >= 0);
+    let _count = compile_source(source);
 }
 
 #[test]
 fn test_compile_enums_fixture() {
     let source = include_str!("../../../tests/fixtures/enums.ts");
-    let count = compile_source(source);
-    assert!(count >= 0);
+    let _count = compile_source(source);
 }
 
 // ============================================================================
@@ -148,9 +141,8 @@ fn test_compile_large_file() {
         ));
     }
 
-    let count = compile_source(&source);
+    let _count = compile_source(&source);
     // Just ensure no panic
-    assert!(count >= 0);
 }
 
 #[test]
@@ -167,8 +159,7 @@ fn test_compile_deeply_nested() {
     source.push(';');
 
     // Should not stack overflow or panic
-    let count = compile_source(&source);
-    assert!(count >= 0);
+    let _count = compile_source(&source);
 }
 
 #[test]
@@ -177,6 +168,5 @@ fn test_compile_many_variables() {
     for i in 0..500 {
         source.push_str(&format!("let v{} = {};\n", i, i));
     }
-    let count = compile_source(&source);
-    assert!(count >= 0);
+    let _count = compile_source(&source);
 }

@@ -14,6 +14,7 @@ pub struct Scope {
     /// The parent scope (None for the global scope).
     pub parent: Option<Box<Scope>>,
     /// The block-scoped container symbol.
+    #[allow(dead_code)]
     pub container: Option<SymbolId>,
 }
 
@@ -27,6 +28,7 @@ impl Scope {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_container(parent: Option<Box<Scope>>, container: SymbolId) -> Self {
         Self {
             locals: SymbolTable::new(),
