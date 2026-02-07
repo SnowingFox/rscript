@@ -37,6 +37,7 @@ pub struct Printer<'i> {
     indent_level: u32,
     options: PrinterOptions,
     interner: &'i StringInterner,
+    source_text: Option<&'static str>, // Will be set temporarily during printing
 }
 
 impl<'i> Printer<'i> {
@@ -46,6 +47,7 @@ impl<'i> Printer<'i> {
             indent_level: 0,
             options: PrinterOptions::default(),
             interner,
+            source_text: None,
         }
     }
 
@@ -55,6 +57,7 @@ impl<'i> Printer<'i> {
             indent_level: 0,
             options,
             interner,
+            source_text: None,
         }
     }
 
@@ -62,9 +65,28 @@ impl<'i> Printer<'i> {
         self.interner.resolve(s)
     }
 
+    /// Extract text from a token using the source text.
+    fn token_text(&self, token: &rscript_ast::node::Token) -> String {
+        if let Some(source) = self.source_text {
+            let range = token.data.range.to_range();
+            if range.end <= source.len() {
+                source[range].to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    }
+
     /// Print a source file to a string.
     pub fn print_source_file(&mut self, source_file: &SourceFile<'_>) -> String {
         self.output.clear();
+        // Store source text for token extraction using unsafe to extend lifetime
+        // This is safe because source_file.text lives as long as source_file,
+        // and we only use source_text during this method call
+        let source_text_ptr: *const str = &*source_file.text;
+        self.source_text = Some(unsafe { &*source_text_ptr });
         for (i, stmt) in source_file.statements.iter().enumerate() {
             if i > 0 { self.write_newline(); }
             self.write_indent();
@@ -73,7 +95,9 @@ impl<'i> Printer<'i> {
         if self.options.trailing_newline && !self.output.is_empty() {
             self.write_newline();
         }
-        self.output.clone()
+        let result = self.output.clone();
+        self.source_text = None; // Clear after use
+        result
     }
 
     // ========================================================================
@@ -895,14 +919,37 @@ impl<'i> Printer<'i> {
             }
             Expression::TemplateExpression(n) => {
                 self.write("`");
-                // Head is a Token - we need to extract its text from the source
-                // For now, use an empty string placeholder
-                self.write(""); // head text
+                // Extract head text from token
+                // TemplateHead token range includes the backtick and ${, so we need to extract just the text part
+                let head_text = self.token_text(&n.head);
+                let head_content = if head_text.starts_with('`') {
+                    // Remove the leading backtick
+                    let mut content = head_text.strip_prefix('`').unwrap_or(&head_text).to_string();
+                    // Remove trailing ${ if present
+                    if content.ends_with("${") {
+                        content = content.strip_suffix("${").unwrap_or(&content).to_string();
+                    }
+                    content
+                } else {
+                    head_text
+                };
+                self.write_owned(head_content);
                 for span in n.template_spans.iter() {
                     self.write("${");
                     self.print_expression(span.expression);
                     self.write("}");
-                    // literal text from span
+                    // Extract literal text from span token
+                    // TemplateMiddle/TemplateTail token range should be just the text (after the })
+                    let literal_text = self.token_text(&span.literal);
+                    // Remove trailing ${ for TemplateMiddle or ` for TemplateTail if present
+                    let literal_content = if literal_text.ends_with("${") {
+                        literal_text.strip_suffix("${").unwrap_or(&literal_text).to_string()
+                    } else if literal_text.ends_with('`') {
+                        literal_text.strip_suffix('`').unwrap_or(&literal_text).to_string()
+                    } else {
+                        literal_text
+                    };
+                    self.write_owned(literal_content);
                 }
                 self.write("`");
             }
@@ -1424,13 +1471,15 @@ impl<'i> Printer<'i> {
         match name {
             PropertyName::Identifier(id) => self.print_identifier(id),
             PropertyName::StringLiteral(tok) => {
-                // Token-based string literal - we'd need source text
-                self.write("\"\"");
-                let _ = tok;
+                // Extract text from token
+                let text = self.token_text(tok);
+                // String literal tokens include quotes, so use them as-is
+                self.write_owned(text);
             }
             PropertyName::NumericLiteral(tok) => {
-                self.write("0");
-                let _ = tok;
+                // Extract text from token
+                let text = self.token_text(tok);
+                self.write_owned(text);
             }
             PropertyName::ComputedPropertyName(c) => {
                 self.write("[");

@@ -9,3 +9,4 @@ rscript_ast = { workspace = true }
 rscript_tspath = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+lazy_static = "1.5"

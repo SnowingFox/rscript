@@ -81,6 +81,8 @@ pub enum SyntaxKind {
     QuestionQuestionToken = 60,
     BacktickToken = 61,
     HashToken = 62,
+    /// JSX self-closing `/>`
+    SlashGreaterThanToken = 821,
 
     // Assignments
     EqualsToken = 63,
@@ -826,6 +828,7 @@ impl SyntaxKind {
             SyntaxKind::QuestionDotToken => Some("?."),
             SyntaxKind::LessThanToken => Some("<"),
             SyntaxKind::LessThanSlashToken => Some("</"),
+            SyntaxKind::SlashGreaterThanToken => Some("/>"),
             SyntaxKind::GreaterThanToken => Some(">"),
             SyntaxKind::LessThanEqualsToken => Some("<="),
             SyntaxKind::GreaterThanEqualsToken => Some(">="),

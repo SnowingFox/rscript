@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 /// A document tracked by the language service.
 #[derive(Debug)]
-#[allow(dead_code)]
 struct Document {
     /// The file name.
     file_name: String,
@@ -19,6 +18,17 @@ struct Document {
     text: String,
     /// Version number for incremental updates.
     version: i32,
+    /// Cached diagnostics for this version (avoids re-parse/bind/check).
+    cached_diagnostics: Option<CachedDiagnostics>,
+}
+
+/// Cached compilation results for a document at a specific version.
+#[derive(Debug, Clone)]
+struct CachedDiagnostics {
+    /// The version this cache was computed for.
+    version: i32,
+    /// The cached diagnostics.
+    diagnostics: Vec<rscript_diagnostics::Diagnostic>,
 }
 
 /// Language service providing IDE features.
@@ -40,6 +50,7 @@ impl LanguageService {
             file_name: uri,
             text,
             version,
+            cached_diagnostics: None, // invalidate cache on open
         });
     }
 
@@ -48,6 +59,7 @@ impl LanguageService {
         if let Some(doc) = self.documents.get_mut(uri) {
             doc.text = text;
             doc.version = version;
+            doc.cached_diagnostics = None; // invalidate cache on update
         }
     }
 
@@ -62,14 +74,27 @@ impl LanguageService {
     }
 
     /// Get diagnostics for a file.
-    pub fn get_diagnostics(&self, file_name: &str) -> Vec<rscript_diagnostics::Diagnostic> {
+    /// Uses cached diagnostics if the document version hasn't changed,
+    /// avoiding re-parse/bind/check on every request.
+    pub fn get_diagnostics(&mut self, file_name: &str) -> Vec<rscript_diagnostics::Diagnostic> {
+        // Check if we have a valid cache for the current version
+        if let Some(doc) = self.documents.get(file_name) {
+            if let Some(cached) = &doc.cached_diagnostics {
+                if cached.version == doc.version {
+                    return cached.diagnostics.clone();
+                }
+            }
+        }
+
+        // No cache hit — compute diagnostics
         let text = match self.documents.get(file_name) {
-            Some(doc) => &doc.text,
+            Some(doc) => doc.text.clone(),
             None => return Vec::new(),
         };
+        let version = self.documents.get(file_name).map(|d| d.version).unwrap_or(0);
 
         let arena = Bump::new();
-        let parser = Parser::new(&arena, file_name, text);
+        let parser = Parser::new(&arena, file_name, &text);
         let source_file = parser.parse_source_file();
 
         let mut binder = Binder::new();
@@ -79,7 +104,17 @@ impl LanguageService {
         checker.check_source_file(&source_file);
 
         let diags = checker.take_diagnostics();
-        diags.into_diagnostics()
+        let diagnostics = diags.into_diagnostics();
+
+        // Store in cache
+        if let Some(doc) = self.documents.get_mut(file_name) {
+            doc.cached_diagnostics = Some(CachedDiagnostics {
+                version,
+                diagnostics: diagnostics.clone(),
+            });
+        }
+
+        diagnostics
     }
 
     /// Get completions at a position.

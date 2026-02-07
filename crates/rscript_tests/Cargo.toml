@@ -1,0 +1,8 @@
+[package]
+name = "rscript_tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rscript_parser = { workspace = true }
+bumpalo = { workspace = true }

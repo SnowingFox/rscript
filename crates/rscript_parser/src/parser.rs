@@ -156,7 +156,15 @@ impl<'a> Parser<'a> {
     }
 
     fn error(&mut self, msg: &rscript_diagnostics::DiagnosticMessage, args: &[&str]) {
-        self.diagnostics.add(rscript_diagnostics::Diagnostic::new(msg, args));
+        let pos = self.token_pos();
+        let end = self.token_end();
+        let span = rscript_core::text::TextSpan::from_bounds(pos, end);
+        self.diagnostics.add(rscript_diagnostics::Diagnostic::with_location(
+            self.file_name.clone(),
+            span,
+            msg,
+            args,
+        ));
     }
 
     /// Check if identifier text matches (without interning - using scanner token_value).
@@ -173,10 +181,52 @@ impl<'a> Parser<'a> {
         while self.current_token() != SyntaxKind::EndOfFileToken
             && self.current_token() != SyntaxKind::CloseBraceToken
         {
+            let saved_pos = self.scanner.token_start();
             let stmt = self.parse_statement();
             statements.push(stmt);
+
+            // Error recovery: if the parser hasn't advanced past the same position,
+            // skip forward to the next statement-starting token to avoid infinite loops.
+            if self.scanner.token_start() == saved_pos {
+                self.skip_to_next_statement();
+            }
         }
         alloc_vec_in(self.arena, statements)
+    }
+
+    /// Error recovery: skip tokens until we find one that can start a new statement.
+    /// This prevents cascading errors from a single parse failure.
+    fn skip_to_next_statement(&mut self) {
+        while self.current_token() != SyntaxKind::EndOfFileToken {
+            match self.current_token() {
+                // Tokens that can start a new statement
+                SyntaxKind::VarKeyword
+                | SyntaxKind::LetKeyword
+                | SyntaxKind::ConstKeyword
+                | SyntaxKind::UsingKeyword
+                | SyntaxKind::FunctionKeyword
+                | SyntaxKind::ClassKeyword
+                | SyntaxKind::InterfaceKeyword
+                | SyntaxKind::EnumKeyword
+                | SyntaxKind::TypeKeyword
+                | SyntaxKind::IfKeyword
+                | SyntaxKind::ForKeyword
+                | SyntaxKind::WhileKeyword
+                | SyntaxKind::DoKeyword
+                | SyntaxKind::SwitchKeyword
+                | SyntaxKind::ReturnKeyword
+                | SyntaxKind::ThrowKeyword
+                | SyntaxKind::TryKeyword
+                | SyntaxKind::BreakKeyword
+                | SyntaxKind::ContinueKeyword
+                | SyntaxKind::ExportKeyword
+                | SyntaxKind::ImportKeyword
+                | SyntaxKind::CloseBraceToken => return,
+                _ => {
+                    self.next_token();
+                }
+            }
+        }
     }
 
     fn parse_statement(&mut self) -> Statement<'a> {
@@ -189,7 +239,8 @@ impl<'a> Parser<'a> {
             }
             SyntaxKind::OpenBraceToken => Statement::Block(self.parse_block()),
             SyntaxKind::ConstKeyword if self.is_const_enum() => self.parse_const_enum_declaration(),
-            SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword => self.parse_variable_statement(),
+            SyntaxKind::AwaitKeyword if self.is_await_using() => self.parse_await_using_statement(),
+            SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword | SyntaxKind::UsingKeyword => self.parse_variable_statement(),
             SyntaxKind::FunctionKeyword => self.parse_function_declaration(false),
             SyntaxKind::ClassKeyword => self.parse_class_declaration(false),
             SyntaxKind::IfKeyword => self.parse_if_statement(),
@@ -240,6 +291,30 @@ impl<'a> Parser<'a> {
         result
     }
 
+    /// Look ahead: `await using` is an await-using variable declaration (TS 5.2+).
+    fn is_await_using(&mut self) -> bool {
+        let saved = self.scanner.save_state();
+        let next = self.scanner.scan();
+        let result = next == SyntaxKind::UsingKeyword;
+        self.scanner.restore_state(saved);
+        result
+    }
+
+    /// Parse `await using x = ...;` — skip `await`, handle as AWAIT_USING declaration.
+    fn parse_await_using_statement(&mut self) -> Statement<'a> {
+        let pos = self.token_pos();
+        self.next_token(); // skip 'await'
+        // Now at 'using'
+        let mut decl_list = self.parse_variable_declaration_list();
+        decl_list.data.flags = NodeFlags::AWAIT_USING;
+        self.parse_expected_semicolon();
+        let end = self.token_end();
+        Statement::VariableStatement(VariableStatement {
+            data: NodeData::new(SyntaxKind::VariableStatement, pos, end),
+            declaration_list: decl_list,
+        })
+    }
+
     /// Parse `const enum Foo { ... }` — skip `const` and delegate to enum parser.
     fn parse_const_enum_declaration(&mut self) -> Statement<'a> {
         self.next_token(); // skip 'const'
@@ -287,7 +362,7 @@ impl<'a> Parser<'a> {
             SyntaxKind::InterfaceKeyword => self.parse_interface_declaration(),
             SyntaxKind::EnumKeyword => self.parse_enum_declaration(),
             SyntaxKind::TypeKeyword => self.parse_type_alias_declaration(),
-            SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword => self.parse_variable_statement(),
+            SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword | SyntaxKind::UsingKeyword => self.parse_variable_statement(),
             _ => {
                 let end = self.token_end();
                 self.next_token();
@@ -326,6 +401,7 @@ impl<'a> Parser<'a> {
         match self.current_token() {
             SyntaxKind::LetKeyword => flags |= NodeFlags::LET,
             SyntaxKind::ConstKeyword => flags |= NodeFlags::CONST,
+            SyntaxKind::UsingKeyword => flags |= NodeFlags::USING,
             _ => {}
         }
         self.next_token();
@@ -547,7 +623,7 @@ impl<'a> Parser<'a> {
         self.expect_token(SyntaxKind::OpenParenToken);
 
         let initializer = if self.current_token() != SyntaxKind::SemicolonToken {
-            if matches!(self.current_token(), SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword) {
+            if matches!(self.current_token(), SyntaxKind::VarKeyword | SyntaxKind::LetKeyword | SyntaxKind::ConstKeyword | SyntaxKind::UsingKeyword) {
                 Some(ForInitializer::VariableDeclarationList(self.parse_variable_declaration_list()))
             } else {
                 Some(ForInitializer::Expression(self.parse_expression_and_alloc()))
@@ -620,6 +696,11 @@ impl<'a> Parser<'a> {
     fn parse_throw_statement(&mut self) -> Statement<'a> {
         let pos = self.token_pos();
         self.expect_token(SyntaxKind::ThrowKeyword);
+        // ECMAScript spec: no line terminator allowed between `throw` and expression.
+        // A line break here means ASI inserts a semicolon, making `throw;` which is illegal.
+        if self.scanner.has_preceding_line_break() {
+            self.error(&rscript_diagnostics::messages::EXPRESSION_EXPECTED, &[]);
+        }
         let expression = self.parse_expression_and_alloc();
         let end = self.token_end();
         self.parse_expected_semicolon();
@@ -2723,7 +2804,22 @@ impl<'a> Parser<'a> {
                 if self.current_token() == SyntaxKind::FunctionKeyword && !self.scanner.has_preceding_line_break() {
                     return self.parse_function_expression();
                 }
-                // Async arrow: async (params) => body or async x => body
+                // Async arrow: async (params) => body
+                if self.current_token() == SyntaxKind::OpenParenToken && !self.scanner.has_preceding_line_break() {
+                    if self.is_parenthesized_arrow_function() {
+                        return self.parse_parenthesized_arrow_function(pos);
+                    }
+                }
+                // Async arrow: async x => body
+                if self.current_token() == SyntaxKind::Identifier && !self.scanner.has_preceding_line_break() {
+                    let saved = self.scanner.save_state();
+                    let id = self.parse_identifier();
+                    if self.current_token() == SyntaxKind::EqualsGreaterThanToken && !self.scanner.has_preceding_line_break() {
+                        return self.parse_arrow_function_after_identifier(id);
+                    }
+                    // Not an arrow — restore and return `async` as identifier
+                    self.scanner.restore_state(saved);
+                }
                 Expression::Identifier(Identifier {
                     data: NodeData::new(SyntaxKind::Identifier, pos, self.token_end()),
                     text: InternedString::dummy(), text_name: "async".to_string(),
@@ -2747,30 +2843,200 @@ impl<'a> Parser<'a> {
 
     fn parse_parenthesized_expression(&mut self) -> Expression<'a> {
         let pos = self.token_pos();
-        self.expect_token(SyntaxKind::OpenParenToken);
 
-        // Empty parens: () => ... (arrow function)
-        if self.current_token() == SyntaxKind::CloseParenToken {
-            self.next_token();
-            if self.current_token() == SyntaxKind::EqualsGreaterThanToken {
-                return self.parse_arrow_function_body(pos, &[], None);
-            }
+        // Use lookahead to decide if this is an arrow function or parenthesized expression.
+        // This resolves the classic ambiguity: `(x: number) => x` vs `(x + y)`.
+        if self.is_parenthesized_arrow_function() {
+            return self.parse_parenthesized_arrow_function(pos);
         }
 
+        // Not an arrow function — parse as parenthesized expression.
+        self.expect_token(SyntaxKind::OpenParenToken);
         let inner = self.parse_expression();
         let inner_ref = self.arena.alloc(inner);
         let end = self.token_end();
         self.expect_token(SyntaxKind::CloseParenToken);
 
-        // Check for arrow: (expr) =>
+        // Edge case: `(expr) =>` where expr is a simple identifier
         if self.current_token() == SyntaxKind::EqualsGreaterThanToken && !self.scanner.has_preceding_line_break() {
-            return self.parse_arrow_function_body(pos, &[], None);
+            // Convert the expression to a parameter
+            let params = self.expression_to_parameters(inner_ref);
+            return self.parse_arrow_function_body(pos, params, None);
         }
 
         Expression::Parenthesized(ParenthesizedExpression {
             data: NodeData::new(SyntaxKind::ParenthesizedExpression, pos, end),
             expression: inner_ref,
         })
+    }
+
+    /// Lookahead to determine if a `(` starts an arrow function parameter list.
+    /// Saves and restores scanner state.
+    fn is_parenthesized_arrow_function(&mut self) -> bool {
+        let saved = self.scanner.save_state();
+        let result = self.is_parenthesized_arrow_function_inner();
+        self.scanner.restore_state(saved);
+        result
+    }
+
+    fn is_parenthesized_arrow_function_inner(&mut self) -> bool {
+        // We're at `(` — skip it
+        debug_assert_eq!(self.scanner.token(), SyntaxKind::OpenParenToken);
+        self.scanner.scan();
+
+        // `() =>` — definitely arrow
+        if self.scanner.token() == SyntaxKind::CloseParenToken {
+            self.scanner.scan();
+            return self.scanner.token() == SyntaxKind::EqualsGreaterThanToken
+                || self.scanner.token() == SyntaxKind::ColonToken; // (): T =>
+        }
+
+        // `(...` — rest parameter, definitely arrow
+        if self.scanner.token() == SyntaxKind::DotDotDotToken {
+            return true;
+        }
+
+        // Scan through tokens inside the parens. If we see patterns that can only appear
+        // in a parameter list (type annotations on identifiers, multiple comma-separated
+        // identifiers with type annotations, `?:`, `=`), it's an arrow function.
+        let mut depth: u32 = 1;
+        let mut first_token_after_open = true;
+        while depth > 0 {
+            let tok = self.scanner.token();
+            match tok {
+                SyntaxKind::OpenParenToken => { depth += 1; }
+                SyntaxKind::CloseParenToken => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // We've reached the matching `)`. Check what follows.
+                        self.scanner.scan();
+                        let next = self.scanner.token();
+                        // `) =>` — definitely arrow
+                        if next == SyntaxKind::EqualsGreaterThanToken {
+                            return true;
+                        }
+                        // `): type =>` — return type annotation followed by arrow
+                        if next == SyntaxKind::ColonToken {
+                            // Skip past the return type to find `=>`
+                            return self.skip_type_annotation_and_check_arrow();
+                        }
+                        return false;
+                    }
+                }
+                SyntaxKind::EndOfFileToken => return false,
+                SyntaxKind::ColonToken if depth == 1 && first_token_after_open => {
+                    // `(x:` — type annotation on first param, definitely arrow
+                    // But only if what preceded the colon was an identifier
+                    // (already consumed, so we just trust the pattern)
+                    return true;
+                }
+                _ => {}
+            }
+            first_token_after_open = false;
+            // After seeing an identifier, check if next is `:`, `?`, `,` or `=`
+            if tok == SyntaxKind::Identifier && depth == 1 {
+                self.scanner.scan();
+                let after_id = self.scanner.token();
+                match after_id {
+                    SyntaxKind::ColonToken => return true,     // `id:` — type annotation
+                    SyntaxKind::QuestionToken => return true,   // `id?` — optional param
+                    SyntaxKind::EqualsToken => return true,     // `id =` — default value
+                    SyntaxKind::CommaToken => {
+                        // `id,` — could be arrow or tuple destructuring. Keep scanning.
+                        self.scanner.scan();
+                        continue;
+                    }
+                    SyntaxKind::CloseParenToken => {
+                        // `(id)` — might be arrow `(id) =>`, continue to check `=>`
+                        continue;
+                    }
+                    _ => {
+                        self.scanner.scan();
+                        continue;
+                    }
+                }
+            }
+            self.scanner.scan();
+        }
+        false
+    }
+
+    /// After `)` and `:`, skip past a type annotation and check if `=>` follows.
+    fn skip_type_annotation_and_check_arrow(&mut self) -> bool {
+        // We're past the `:` — skip tokens until we find `=>` or `{` at depth 0.
+        // Handle nested parens, brackets, braces, and angle brackets.
+        self.scanner.scan(); // skip past `:`
+        let mut depth: u32 = 0;
+        loop {
+            let tok = self.scanner.token();
+            match tok {
+                SyntaxKind::EqualsGreaterThanToken if depth == 0 => return true,
+                SyntaxKind::OpenParenToken | SyntaxKind::LessThanToken | SyntaxKind::OpenBracketToken => {
+                    depth += 1;
+                }
+                SyntaxKind::CloseParenToken | SyntaxKind::GreaterThanToken | SyntaxKind::CloseBracketToken => {
+                    if depth > 0 { depth -= 1; }
+                }
+                SyntaxKind::OpenBraceToken if depth == 0 => return false,
+                SyntaxKind::SemicolonToken | SyntaxKind::EndOfFileToken => return false,
+                _ => {}
+            }
+            self.scanner.scan();
+        }
+    }
+
+    /// Parse a parenthesized arrow function: `(params) => body` or `(params): returnType => body`
+    fn parse_parenthesized_arrow_function(&mut self, pos: u32) -> Expression<'a> {
+        let type_parameters = self.try_parse_type_parameters();
+        self.expect_token(SyntaxKind::OpenParenToken);
+        let mut params = Vec::new();
+        while self.current_token() != SyntaxKind::CloseParenToken && self.current_token() != SyntaxKind::EndOfFileToken {
+            params.push(self.parse_parameter());
+            if self.optional_token(SyntaxKind::CommaToken).is_none() { break; }
+        }
+        self.expect_token(SyntaxKind::CloseParenToken);
+        let return_type = if self.optional_token(SyntaxKind::ColonToken).is_some() {
+            Some(self.parse_type_and_alloc())
+        } else {
+            None
+        };
+        let parameters = alloc_vec_in(self.arena, params);
+        let eq_token = self.expect_token(SyntaxKind::EqualsGreaterThanToken);
+        let body = if self.current_token() == SyntaxKind::OpenBraceToken {
+            let block = self.parse_block();
+            ArrowFunctionBody::Block(self.arena.alloc(block))
+        } else {
+            let expr = self.parse_assignment_expression();
+            ArrowFunctionBody::Expression(self.arena.alloc(expr))
+        };
+        let end = self.token_end();
+        Expression::ArrowFunction(ArrowFunction {
+            data: NodeData::new(SyntaxKind::ArrowFunction, pos, end),
+            type_parameters, parameters, return_type,
+            equals_greater_than_token: eq_token, body,
+        })
+    }
+
+    /// Convert a parsed expression back into arrow function parameters.
+    /// Handles the edge case: `(x) =>` where we already parsed `x` as an expression.
+    fn expression_to_parameters(&mut self, expr: &'a Expression<'a>) -> &'a [ParameterDeclaration<'a>] {
+        match expr {
+            Expression::Identifier(id) => {
+                let param = ParameterDeclaration {
+                    data: id.data.clone(),
+                    dot_dot_dot_token: None,
+                    name: BindingName::Identifier(id.clone()),
+                    question_token: None,
+                    type_annotation: None,
+                    initializer: None,
+                };
+                alloc_vec_in(self.arena, vec![param])
+            }
+            _ => {
+                // Fallback: no params (best effort)
+                &[]
+            }
+        }
     }
 
     fn parse_arrow_function_after_identifier(&mut self, id: Identifier) -> Expression<'a> {

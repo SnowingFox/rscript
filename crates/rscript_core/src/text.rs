@@ -242,6 +242,45 @@ impl LineMap {
     }
 }
 
+/// Convert a byte offset to UTF-16 code unit offset.
+/// 
+/// This is needed for LSP which uses UTF-16 code units for positions.
+/// 
+/// - ASCII characters: 1 byte = 1 UTF-16 code unit
+/// - BMP characters (U+0000 to U+FFFF): variable bytes = 1 UTF-16 code unit
+/// - Supplementary characters (U+10000+): variable bytes = 2 UTF-16 code units (surrogate pair)
+/// 
+/// If the byte offset is in the middle of a multi-byte character, it counts up to
+/// (but not including) that character's UTF-16 representation.
+pub fn byte_offset_to_utf16_offset(source: &str, byte_offset: usize) -> usize {
+    if byte_offset > source.len() {
+        return byte_offset_to_utf16_offset(source, source.len());
+    }
+    
+    let mut utf16_offset = 0;
+    let mut byte_pos = 0;
+    
+    // Iterate through characters up to the byte offset
+    for ch in source.chars() {
+        let ch_len = ch.len_utf8();
+        
+        // If adding this character would exceed the byte offset, stop
+        if byte_pos + ch_len > byte_offset {
+            break;
+        }
+        
+        byte_pos += ch_len;
+        utf16_offset += ch.len_utf16();
+        
+        // If we've reached exactly the byte offset, stop
+        if byte_pos >= byte_offset {
+            break;
+        }
+    }
+    
+    utf16_offset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +316,78 @@ mod tests {
         let lc = map.line_and_column_of(8);
         assert_eq!(lc.line, 1);
         assert_eq!(lc.character, 2);
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_ascii() {
+        let text = "hello";
+        assert_eq!(byte_offset_to_utf16_offset(text, 0), 0);
+        assert_eq!(byte_offset_to_utf16_offset(text, 1), 1);
+        assert_eq!(byte_offset_to_utf16_offset(text, 5), 5);
+        assert_eq!(byte_offset_to_utf16_offset(text, 10), 5); // Beyond end
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_bmp() {
+        // BMP character: é (U+00E9) is 2 bytes in UTF-8, 1 UTF-16 code unit
+        let text = "café";
+        // "caf" = 3 bytes = 3 UTF-16 units
+        assert_eq!(byte_offset_to_utf16_offset(text, 3), 3);
+        // "café" = 5 bytes = 4 UTF-16 units (é is 1 UTF-16 unit)
+        assert_eq!(byte_offset_to_utf16_offset(text, 5), 4);
+        
+        // Chinese character: 中 (U+4E2D) is 3 bytes in UTF-8, 1 UTF-16 code unit
+        let text2 = "中文";
+        // "中" = 3 bytes = 1 UTF-16 unit
+        assert_eq!(byte_offset_to_utf16_offset(text2, 3), 1);
+        // "中文" = 6 bytes = 2 UTF-16 units
+        assert_eq!(byte_offset_to_utf16_offset(text2, 6), 2);
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_supplementary() {
+        // Supplementary character: 🎉 (U+1F389) is 4 bytes in UTF-8, 2 UTF-16 code units (surrogate pair)
+        let text = "🎉";
+        // "🎉" = 4 bytes = 2 UTF-16 units
+        assert_eq!(byte_offset_to_utf16_offset(text, 4), 2);
+        
+        // Mixed: ASCII + supplementary
+        let text2 = "a🎉b";
+        // "a" = 1 byte = 1 UTF-16 unit
+        assert_eq!(byte_offset_to_utf16_offset(text2, 1), 1);
+        // "a🎉" = 5 bytes = 3 UTF-16 units (1 + 2)
+        assert_eq!(byte_offset_to_utf16_offset(text2, 5), 3);
+        // "a🎉b" = 6 bytes = 4 UTF-16 units (1 + 2 + 1)
+        assert_eq!(byte_offset_to_utf16_offset(text2, 6), 4);
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_mixed() {
+        // Mixed ASCII, BMP, and supplementary characters
+        let text = "Hello 世界 🎉";
+        // "Hello " = 6 bytes = 6 UTF-16 units
+        assert_eq!(byte_offset_to_utf16_offset(text, 6), 6);
+        // "Hello 世" = 9 bytes = 7 UTF-16 units (6 + 1)
+        assert_eq!(byte_offset_to_utf16_offset(text, 9), 7);
+        // "Hello 世界" = 12 bytes = 8 UTF-16 units (6 + 1 + 1)
+        assert_eq!(byte_offset_to_utf16_offset(text, 12), 8);
+        // "Hello 世界 " = 13 bytes = 9 UTF-16 units (6 + 1 + 1 + 1)
+        assert_eq!(byte_offset_to_utf16_offset(text, 13), 9);
+        // "Hello 世界 🎉" = 17 bytes = 11 UTF-16 units (6 + 1 + 1 + 1 + 2)
+        assert_eq!(byte_offset_to_utf16_offset(text, 17), 11);
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_empty() {
+        let text = "";
+        assert_eq!(byte_offset_to_utf16_offset(text, 0), 0);
+    }
+
+    #[test]
+    fn test_byte_offset_to_utf16_offset_boundary() {
+        // Test boundary cases: byte offset in the middle of a multi-byte character
+        let text = "café";
+        // At byte 4 (middle of é which is 2 bytes), should count up to "caf" = 3 UTF-16 units
+        assert_eq!(byte_offset_to_utf16_offset(text, 4), 3);
     }
 }

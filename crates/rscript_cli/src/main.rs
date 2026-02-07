@@ -6,12 +6,14 @@
 //! This provides a tsc-compatible command-line interface.
 
 use clap::Parser as ClapParser;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, EventKind};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::mpsc;
 use std::time::Instant;
 
 #[derive(ClapParser, Debug)]
-#[command(name = "rsc", about = "rscript - A fast TypeScript compiler written in Rust", disable_version_flag = true)]
+#[command(name = "rsc", about = "rscript - A fast TypeScript compiler written in Rust", version)]
 struct Cli {
     /// TypeScript files to compile.
     #[arg(value_name = "FILE")]
@@ -61,9 +63,6 @@ struct Cli {
     #[arg(long)]
     init: bool,
 
-    /// Print the compiler version.
-    #[arg(short = 'v', long)]
-    version: bool,
 
     /// List all files that are part of the compilation.
     #[arg(long = "listFiles")]
@@ -88,11 +87,6 @@ const RESET: &str = "\x1b[0m";
 
 fn main() {
     let cli = Cli::parse();
-
-    if cli.version {
-        println!("rsc Version 0.1.0");
-        return;
-    }
 
     if cli.init {
         run_init();
@@ -187,7 +181,7 @@ fn run_compile(cli: &Cli) -> i32 {
                 if count == 1 { "" } else { "s" }
             );
         }
-        return 2;
+        return 1;
     }
 
     // Emit if not --noEmit
@@ -258,19 +252,78 @@ fn run_watch(cli: &Cli) {
     println!("Watching for file changes...");
 
     // Use notify crate for file watching
-    // For now, poll-based watching
-    let (files, _config) = resolve_input_files(cli);
-    let mut last_modified = get_latest_mtime(&files);
+    let (files, config) = resolve_input_files(cli);
+    
+    // Create a channel to receive file system events
+    let (tx, rx) = mpsc::channel();
+    
+    // Create a watcher
+    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(tx) {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(&format!("Failed to create file watcher: {}", e));
+            process::exit(1);
+        }
+    };
 
+    // Watch the files and their directories
+    for file in &files {
+        let path = Path::new(file);
+        if let Some(parent) = path.parent() {
+            if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+                eprintln!("Warning: Failed to watch {}: {}", parent.display(), e);
+            }
+        }
+        // Also watch the file itself
+        if let Err(e) = watcher.watch(path, RecursiveMode::NonRecursive) {
+            eprintln!("Warning: Failed to watch {}: {}", file, e);
+        }
+    }
+
+    // If we have a config with include patterns, watch those directories too
+    if let Some(ref cfg) = config {
+        if let Some(include) = &cfg.include {
+            for pattern in include {
+                // Extract directory from pattern (simplified - assumes patterns like "src/**/*")
+                if let Some(dir) = pattern.split('/').next() {
+                    let dir_path = Path::new(dir);
+                    if dir_path.exists() && dir_path.is_dir() {
+                        if let Err(e) = watcher.watch(dir_path, RecursiveMode::Recursive) {
+                            eprintln!("Warning: Failed to watch {}: {}", dir_path.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Event loop
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let current_mtime = get_latest_mtime(&files);
-        if current_mtime > last_modified {
-            last_modified = current_mtime;
-            println!();
-            println!("File change detected. Starting compilation...");
-            println!();
-            let _code = run_compile(cli);
+        match rx.recv() {
+            Ok(Ok(Event { kind: EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_), paths, .. })) => {
+                // Check if any of the changed paths are source files we care about
+                let should_recompile = paths.iter().any(|path| {
+                    files.iter().any(|f| {
+                        Path::new(f) == path || path.starts_with(Path::new(f).parent().unwrap_or(Path::new(".")))
+                    })
+                });
+
+                if should_recompile {
+                    println!();
+                    println!("File change detected. Starting compilation...");
+                    println!();
+                    let _code = run_compile(cli);
+                }
+            }
+            Ok(Ok(_)) => {
+                // Other event types, ignore
+            }
+            Ok(Err(e)) => {
+                eprintln!("Error from file watcher: {}", e);
+            }
+            Err(e) => {
+                eprintln!("Error receiving file system event: {}", e);
+            }
         }
     }
 }
@@ -303,7 +356,6 @@ fn run_build(cli: &Cli) {
                 watch: false,
                 build: false,
                 init: false,
-                version: false,
                 list_files: cli.list_files,
                 pretty: cli.pretty,
                 lsp: false,
@@ -417,16 +469,3 @@ fn atty_is_terminal() -> bool {
     }
 }
 
-fn get_latest_mtime(files: &[String]) -> std::time::SystemTime {
-    let mut latest = std::time::SystemTime::UNIX_EPOCH;
-    for f in files {
-        if let Ok(metadata) = std::fs::metadata(f) {
-            if let Ok(mtime) = metadata.modified() {
-                if mtime > latest {
-                    latest = mtime;
-                }
-            }
-        }
-    }
-    latest
-}

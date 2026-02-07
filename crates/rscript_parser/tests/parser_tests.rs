@@ -1576,3 +1576,82 @@ fn test_parse_many_params_function() {
     let src = "function f(a: number, b: string, c: boolean, d: any, e: unknown, f: never, g: void): void {}";
     assert_statement_count(src, 1);
 }
+
+// =========================================================================
+// using declaration (TS 5.2+)
+// =========================================================================
+
+#[test]
+fn test_parse_using_declaration() {
+    let src = "using resource = getResource();";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_parse_await_using_declaration() {
+    let src = "await using resource = getAsyncResource();";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_parse_using_multiple_declarations() {
+    let src = "using a = getA(), b = getB();";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_parse_using_in_block() {
+    let src = "{ using x = acquire(); console.log(x); }";
+    assert_statement_count(src, 1);
+}
+
+// =========================================================================
+// ASI (Automatic Semicolon Insertion) behavior
+// =========================================================================
+
+#[test]
+fn test_asi_return_no_newline() {
+    // return with value on same line — parses value
+    let src = "function f() { return 42; }";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_asi_return_with_newline() {
+    // return\nvalue — ASI inserts semicolon, return is void
+    // value becomes separate expression statement
+    let src = "function f() { return\n42 }";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_asi_break_no_label() {
+    let src = "while (true) { break; }";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_asi_continue_no_label() {
+    let src = "while (true) { continue; }";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_asi_break_label_same_line() {
+    let src = "outer: while (true) { break outer; }";
+    assert_statement_count(src, 1); // labeled statement
+}
+
+#[test]
+fn test_asi_at_closing_brace() {
+    // Semicolons omitted before `}`
+    let src = "{ const a = 1\nconst b = 2 }";
+    assert_statement_count(src, 1);
+}
+
+#[test]
+fn test_asi_at_eof() {
+    // Semicolon omitted at end of file
+    let src = "const x = 1";
+    assert_statement_count(src, 1);
+}

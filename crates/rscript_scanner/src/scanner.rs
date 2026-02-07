@@ -1034,7 +1034,7 @@ impl Scanner {
     }
 
     /// Scan a JSX token - like scan() but in a JSX context.
-    /// Returns JsxText for text content, or normal tokens for `{`, `<`, `</>`, etc.
+    /// Returns JsxText for text content, or normal tokens for `{`, `<`, `</`, `/>`, `>`, etc.
     pub fn scan_jsx_token(&mut self) -> SyntaxKind {
         self.token_flags = TokenFlags::NONE;
         self.token_value.clear();
@@ -1060,11 +1060,65 @@ impl Scanner {
                     self.token = SyntaxKind::LessThanToken;
                 }
             }
+            '>' => {
+                self.pos += 1;
+                self.token = SyntaxKind::GreaterThanToken;
+            }
+            '/' => {
+                if self.char_at(1) == Some('>') {
+                    self.pos += 2;
+                    self.token = SyntaxKind::SlashGreaterThanToken;
+                } else {
+                    self.pos += 1;
+                    self.token = SyntaxKind::SlashToken;
+                }
+            }
+            '=' => {
+                self.pos += 1;
+                self.token = SyntaxKind::EqualsToken;
+            }
+            '}' => {
+                self.pos += 1;
+                self.token = SyntaxKind::CloseBraceToken;
+            }
             _ => {
                 // JSX text
                 return self.scan_jsx_text();
             }
         }
+        self.token
+    }
+
+    /// Scan a JSX identifier (tag name or attribute name).
+    /// JSX identifiers allow hyphens (`data-id`) and dots (`React.Fragment`)
+    /// and namespaced names (`xml:lang`).
+    pub fn scan_jsx_identifier(&mut self) -> SyntaxKind {
+        self.token_start = self.pos;
+        if self.is_eof() {
+            self.token = SyntaxKind::EndOfFileToken;
+            return self.token;
+        }
+
+        let start = self.pos;
+        // First char must be alpha or _ or $
+        let ch = self.text[self.pos];
+        if !ch.is_ascii_alphabetic() && ch != '_' && ch != '$' {
+            return self.scan();
+        }
+        self.pos += 1;
+
+        // Subsequent chars can include hyphens and dots (for JSX purposes)
+        while !self.is_eof() {
+            let c = self.text[self.pos];
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '-' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+
+        self.token_value = self.text[start..self.pos].iter().collect();
+        self.token = SyntaxKind::Identifier;
         self.token
     }
 
@@ -1338,6 +1392,89 @@ mod tests {
         let kind = scanner.scan_jsx_text();
         assert_eq!(kind, SyntaxKind::JsxText);
         assert_eq!(scanner.token_value(), "Hello World");
+    }
+
+    #[test]
+    fn test_scan_jsx_self_closing_tag() {
+        // <br/>
+        let mut scanner = Scanner::new("<br/>");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanToken);
+        // Scan the identifier "br"
+        assert_eq!(scanner.scan_jsx_identifier(), SyntaxKind::Identifier);
+        assert_eq!(scanner.token_value(), "br");
+        // Scan the self-closing />
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::SlashGreaterThanToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_tag_with_attribute() {
+        // <div className="x">
+        let mut scanner = Scanner::new("<div className=\"x\">");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanToken);
+        assert_eq!(scanner.scan_jsx_identifier(), SyntaxKind::Identifier);
+        assert_eq!(scanner.token_value(), "div");
+        // Skip whitespace then scan attribute name
+        scanner.scan(); // scans "className"
+        assert_eq!(scanner.token_value(), "className");
+        assert_eq!(scanner.scan(), SyntaxKind::EqualsToken);
+        assert_eq!(scanner.scan_jsx_attribute_value(), SyntaxKind::StringLiteral);
+        assert_eq!(scanner.token_value(), "x");
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::GreaterThanToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_closing_tag() {
+        // </div>
+        let mut scanner = Scanner::new("</div>");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanSlashToken);
+        assert_eq!(scanner.scan_jsx_identifier(), SyntaxKind::Identifier);
+        assert_eq!(scanner.token_value(), "div");
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::GreaterThanToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_fragment() {
+        // <></>
+        let mut scanner = Scanner::new("<></>");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanToken);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::GreaterThanToken);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanSlashToken);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::GreaterThanToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_text_content() {
+        // Content between tags
+        let mut scanner = Scanner::new("Hello <span>");
+        scanner.set_in_jsx(true);
+        let kind = scanner.scan_jsx_token();
+        assert_eq!(kind, SyntaxKind::JsxText);
+        assert_eq!(scanner.token_value(), "Hello ");
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::LessThanToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_expression_container() {
+        // {expr}
+        let mut scanner = Scanner::new("{value}");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::OpenBraceToken);
+        assert_eq!(scanner.scan(), SyntaxKind::Identifier);
+        assert_eq!(scanner.token_value(), "value");
+        assert_eq!(scanner.scan_jsx_token(), SyntaxKind::CloseBraceToken);
+    }
+
+    #[test]
+    fn test_scan_jsx_hyphenated_attribute() {
+        // data-id attribute
+        let mut scanner = Scanner::new("data-id");
+        scanner.set_in_jsx(true);
+        assert_eq!(scanner.scan_jsx_identifier(), SyntaxKind::Identifier);
+        assert_eq!(scanner.token_value(), "data-id");
     }
 
     #[test]

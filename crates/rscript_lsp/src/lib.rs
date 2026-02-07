@@ -65,7 +65,7 @@ impl RscriptLspServer {
 
     async fn publish_diagnostics(&self, uri: Url) {
         let diagnostics = {
-            let ls = self.language_service.lock().unwrap();
+            let mut ls = self.language_service.lock().unwrap();
             let key = Self::uri_to_key(&uri);
             let diags = ls.get_diagnostics(&key);
             let text = ls.get_document_text(&key).unwrap_or("").to_string();

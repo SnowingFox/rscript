@@ -8,6 +8,8 @@
 
 use rscript_tspath::Extension;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Module resolution strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,25 +109,47 @@ fn parse_exports_field(value: Option<&serde_json::Value>) -> Option<PackageExpor
     }
 }
 
+// Module resolution cache
+lazy_static::lazy_static! {
+    static ref RESOLUTION_CACHE: Mutex<HashMap<(String, String), Option<ResolvedModule>>> = Mutex::new(HashMap::new());
+}
+
 /// Resolve a module name to a file path.
 pub fn resolve_module_name(
     module_name: &str,
     containing_file: &str,
     options: &ModuleResolutionOptions,
 ) -> Option<ResolvedModule> {
-    // Try path mappings first
-    if let Some(resolved) = try_path_mappings(module_name, options) {
-        return Some(resolved);
+    // Check cache first
+    let cache_key = (module_name.to_string(), containing_file.to_string());
+    {
+        let cache = RESOLUTION_CACHE.lock().unwrap();
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached.clone();
+        }
     }
 
-    match options.kind {
-        ModuleResolutionKind::Node10 => resolve_node10(module_name, containing_file, options),
-        ModuleResolutionKind::Node16 | ModuleResolutionKind::NodeNext => {
-            resolve_node16(module_name, containing_file, options)
+    // Try path mappings first
+    let result = if let Some(resolved) = try_path_mappings(module_name, options) {
+        Some(resolved)
+    } else {
+        match options.kind {
+            ModuleResolutionKind::Node10 => resolve_node10(module_name, containing_file, options),
+            ModuleResolutionKind::Node16 | ModuleResolutionKind::NodeNext => {
+                resolve_node16(module_name, containing_file, options)
+            }
+            ModuleResolutionKind::Bundler => resolve_bundler(module_name, containing_file, options),
+            ModuleResolutionKind::Classic => resolve_classic(module_name, containing_file, options),
         }
-        ModuleResolutionKind::Bundler => resolve_bundler(module_name, containing_file, options),
-        ModuleResolutionKind::Classic => resolve_classic(module_name, containing_file, options),
+    };
+
+    // Cache the result
+    {
+        let mut cache = RESOLUTION_CACHE.lock().unwrap();
+        cache.insert(cache_key, result.clone());
     }
+
+    result
 }
 
 /// Try to resolve using tsconfig paths mappings.
@@ -165,6 +189,14 @@ const TS_EXTENSIONS: &[Extension] = &[Extension::Ts, Extension::Tsx, Extension::
 #[allow(dead_code)]
 const JS_EXTENSIONS: &[Extension] = &[Extension::Js, Extension::Jsx];
 const ALL_EXTENSIONS: &[Extension] = &[Extension::Ts, Extension::Tsx, Extension::Dts, Extension::Js, Extension::Jsx];
+const ESM_EXTENSIONS: &[Extension] = &[Extension::Mts, Extension::Mjs, Extension::Dmts];
+const CJS_EXTENSIONS: &[Extension] = &[Extension::Cts, Extension::Cjs, Extension::Dcts];
+const ALL_EXTENSIONS_WITH_MODULE: &[Extension] = &[
+    Extension::Ts, Extension::Tsx, Extension::Dts,
+    Extension::Js, Extension::Jsx,
+    Extension::Mts, Extension::Mjs, Extension::Dmts,
+    Extension::Cts, Extension::Cjs, Extension::Dcts,
+];
 
 fn try_file_extensions(candidate: &str) -> Option<ResolvedModule> {
     // Try the path as-is first (if it already has an extension)
@@ -178,8 +210,8 @@ fn try_file_extensions(candidate: &str) -> Option<ResolvedModule> {
         });
     }
 
-    // Try with extensions
-    for ext in ALL_EXTENSIONS {
+    // Try with extensions (including module-specific ones)
+    for ext in ALL_EXTENSIONS_WITH_MODULE {
         let path = format!("{}{}", candidate, ext.as_str());
         if Path::new(&path).exists() {
             return Some(ResolvedModule {
@@ -192,7 +224,7 @@ fn try_file_extensions(candidate: &str) -> Option<ResolvedModule> {
     }
 
     // Try /index
-    for ext in ALL_EXTENSIONS {
+    for ext in ALL_EXTENSIONS_WITH_MODULE {
         let path = format!("{}/index{}", candidate, ext.as_str());
         if Path::new(&path).exists() {
             return Some(ResolvedModule {
@@ -208,9 +240,18 @@ fn try_file_extensions(candidate: &str) -> Option<ResolvedModule> {
 }
 
 fn detect_extension(path: &str) -> Extension {
-    if path.ends_with(".d.ts") { Extension::Dts }
-    else if path.ends_with(".ts") { Extension::Ts }
+    // Check declaration extensions first (longer matches)
+    if path.ends_with(".d.mts") { Extension::Dmts }
+    else if path.ends_with(".d.cts") { Extension::Dcts }
+    else if path.ends_with(".d.ts") { Extension::Dts }
+    // Check module-specific extensions
+    else if path.ends_with(".mts") { Extension::Mts }
+    else if path.ends_with(".cts") { Extension::Cts }
+    else if path.ends_with(".mjs") { Extension::Mjs }
+    else if path.ends_with(".cjs") { Extension::Cjs }
+    // Standard extensions
     else if path.ends_with(".tsx") { Extension::Tsx }
+    else if path.ends_with(".ts") { Extension::Ts }
     else if path.ends_with(".jsx") { Extension::Jsx }
     else if path.ends_with(".js") { Extension::Js }
     else if path.ends_with(".json") { Extension::Json }
@@ -346,15 +387,348 @@ fn split_module_name(module_name: &str) -> (&str, &str) {
     }
 }
 
+/// Determine if a file is ESM based on its extension or package.json type field
+fn is_esm_file(file_path: &str, pkg: Option<&PackageJson>) -> bool {
+    // Check file extension first
+    if file_path.ends_with(".mts") || file_path.ends_with(".mjs") {
+        return true;
+    }
+    if file_path.ends_with(".cts") || file_path.ends_with(".cjs") {
+        return false;
+    }
+    
+    // Check package.json type field
+    if let Some(pkg) = pkg {
+        if let Some(ref type_field) = pkg.type_field {
+            return type_field == "module";
+        }
+    }
+    
+    // Default to CJS for Node16/NodeNext
+    false
+}
+
+/// Resolve conditional exports from package.json
+fn resolve_conditional_exports(
+    exports: &PackageExports,
+    subpath: &str,
+    is_esm: bool,
+    package_dir: &Path,
+) -> Option<String> {
+    match exports {
+        PackageExports::String(path) => {
+            // Simple string export - use it directly
+            Some(package_dir.join(path).to_string_lossy().to_string())
+        }
+        PackageExports::Map(conditions) => {
+            // Try to match conditions in order
+            // Priority: "import" (ESM) or "require" (CJS), then "default"
+            let condition_key = if is_esm { "import" } else { "require" };
+            
+            // First try the specific condition
+            for (key, value) in conditions {
+                if key == condition_key {
+                    if let Some(resolved) = resolve_conditional_exports(value, subpath, is_esm, package_dir) {
+                        return Some(resolved);
+                    }
+                }
+            }
+            
+            // Then try "default"
+            for (key, value) in conditions {
+                if key == "default" {
+                    if let Some(resolved) = resolve_conditional_exports(value, subpath, is_esm, package_dir) {
+                        return Some(resolved);
+                    }
+                }
+            }
+            
+            // Try matching subpath patterns (e.g., "./foo" -> "./dist/foo.js")
+            for (key, value) in conditions {
+                if key.starts_with("./") {
+                    let pattern = key.trim_start_matches("./");
+                    if subpath == pattern || subpath.starts_with(&format!("{}/", pattern)) {
+                        if let Some(resolved) = resolve_conditional_exports(value, subpath, is_esm, package_dir) {
+                            return Some(resolved);
+                        }
+                    }
+                }
+            }
+            
+            None
+        }
+        PackageExports::Array(fallbacks) => {
+            // Try each fallback in order
+            for fallback in fallbacks {
+                if let Some(resolved) = resolve_conditional_exports(fallback, subpath, is_esm, package_dir) {
+                    return Some(resolved);
+                }
+            }
+            None
+        }
+    }
+}
+
 fn resolve_node16(
     module_name: &str,
     containing_file: &str,
     options: &ModuleResolutionOptions,
 ) -> Option<ResolvedModule> {
-    // Node16/NodeNext is similar to Node10 with ESM awareness
-    // In ESM mode, relative imports must include extensions
-    // For now, fall back to Node10 resolution
-    resolve_node10(module_name, containing_file, options)
+    let containing_dir = rscript_tspath::get_directory_path(containing_file);
+    
+    // Determine if containing file is ESM
+    let containing_pkg = find_package_json(&containing_dir);
+    let is_esm_context = is_esm_file(containing_file, containing_pkg.as_ref());
+    
+    // Relative import
+    if module_name.starts_with('.') {
+        let candidate = rscript_tspath::combine_paths(&containing_dir, module_name);
+        
+        // In ESM mode, require explicit file extensions for relative imports
+        if is_esm_context {
+            // Check if the path already has an extension
+            if let Some(ext) = rscript_tspath::Extension::from_path(&candidate) {
+                // Has extension - try to resolve it
+                if Path::new(&candidate).exists() {
+                    return Some(ResolvedModule {
+                        resolved_file_name: candidate,
+                        extension: ext,
+                        is_external_library_import: false,
+                        package_json_path: None,
+                    });
+                }
+            }
+            
+            // In ESM, we need explicit extensions - try common ESM extensions
+            for ext in ESM_EXTENSIONS {
+                let path = format!("{}{}", candidate, ext.as_str());
+                if Path::new(&path).exists() {
+                    return Some(ResolvedModule {
+                        resolved_file_name: path,
+                        extension: *ext,
+                        is_external_library_import: false,
+                        package_json_path: None,
+                    });
+                }
+            }
+            
+            // Also try standard extensions
+            for ext in ALL_EXTENSIONS {
+                let path = format!("{}{}", candidate, ext.as_str());
+                if Path::new(&path).exists() {
+                    return Some(ResolvedModule {
+                        resolved_file_name: path,
+                        extension: *ext,
+                        is_external_library_import: false,
+                        package_json_path: None,
+                    });
+                }
+            }
+            
+            // ESM requires explicit extensions, so return None if not found
+            return None;
+        } else {
+            // CJS mode - allow extensionless imports
+            return try_file_extensions(&candidate);
+        }
+    }
+    
+    // Non-relative (bare specifier): search node_modules with ESM awareness
+    resolve_node_modules_esm(module_name, &containing_dir, options, is_esm_context)
+}
+
+/// Find package.json by walking up from a directory
+fn find_package_json(starting_dir: &str) -> Option<PackageJson> {
+    let mut dir = PathBuf::from(starting_dir);
+    loop {
+        let pkg_json_path = dir.join("package.json");
+        if pkg_json_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&pkg_json_path) {
+                return parse_package_json(&content);
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// Resolve node_modules with ESM awareness
+fn resolve_node_modules_esm(
+    module_name: &str,
+    starting_dir: &str,
+    _options: &ModuleResolutionOptions,
+    is_esm_context: bool,
+) -> Option<ResolvedModule> {
+    let mut dir = PathBuf::from(starting_dir);
+    loop {
+        let node_modules = dir.join("node_modules");
+        if node_modules.exists() {
+            let (package_name, subpath) = split_module_name(module_name);
+            let package_dir = node_modules.join(package_name);
+            
+            if package_dir.exists() {
+                let pkg_json_path = package_dir.join("package.json");
+                if pkg_json_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&pkg_json_path) {
+                        if let Some(pkg) = parse_package_json(&content) {
+                            let package_is_esm = pkg.type_field.as_deref() == Some("module");
+                            
+                            // Try conditional exports first
+                            if let Some(ref exports) = pkg.exports {
+                                if !subpath.is_empty() {
+                                    // Subpath export: "package/subpath"
+                                    if let Some(export_path) = resolve_conditional_exports(
+                                        exports,
+                                        &subpath,
+                                        is_esm_context,
+                                        &package_dir,
+                                    ) {
+                                        if Path::new(&export_path).exists() {
+                                            return Some(ResolvedModule {
+                                                resolved_file_name: export_path.clone(),
+                                                extension: detect_extension(&export_path),
+                                                is_external_library_import: true,
+                                                package_json_path: Some(pkg_json_path.to_string_lossy().to_string()),
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    // Root export: "package"
+                                    if let Some(export_path) = resolve_conditional_exports(
+                                        exports,
+                                        ".",
+                                        is_esm_context,
+                                        &package_dir,
+                                    ) {
+                                        if Path::new(&export_path).exists() {
+                                            return Some(ResolvedModule {
+                                                resolved_file_name: export_path.clone(),
+                                                extension: detect_extension(&export_path),
+                                                is_external_library_import: true,
+                                                package_json_path: Some(pkg_json_path.to_string_lossy().to_string()),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Fall back to traditional fields
+                            if !subpath.is_empty() {
+                                let sub_candidate = package_dir.join(subpath).to_string_lossy().to_string();
+                                if let Some(mut resolved) = try_file_extensions_esm(&sub_candidate, package_is_esm) {
+                                    resolved.is_external_library_import = true;
+                                    resolved.package_json_path = Some(pkg_json_path.to_string_lossy().to_string());
+                                    return Some(resolved);
+                                }
+                            }
+                            
+                            // Try "types" or "typings" field
+                            if let Some(ref types_entry) = pkg.types.as_ref().or(pkg.typings.as_ref()) {
+                                let types_path = package_dir.join(types_entry);
+                                if types_path.exists() {
+                                    return Some(ResolvedModule {
+                                        resolved_file_name: types_path.to_string_lossy().to_string(),
+                                        extension: detect_extension(&types_path.to_string_lossy()),
+                                        is_external_library_import: true,
+                                        package_json_path: Some(pkg_json_path.to_string_lossy().to_string()),
+                                    });
+                                }
+                            }
+                            
+                            // Try "main" field
+                            if let Some(ref main_entry) = pkg.main {
+                                let main_path = package_dir.join(main_entry);
+                                if let Some(mut resolved) = try_file_extensions_esm(&main_path.to_string_lossy(), package_is_esm) {
+                                    resolved.is_external_library_import = true;
+                                    resolved.package_json_path = Some(pkg_json_path.to_string_lossy().to_string());
+                                    return Some(resolved);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Try index files with ESM awareness
+                let pkg_str = package_dir.to_string_lossy().to_string();
+                if let Some(mut resolved) = try_file_extensions_esm(&pkg_str, is_esm_context) {
+                    resolved.is_external_library_import = true;
+                    return Some(resolved);
+                }
+            }
+            
+            // Try @types package
+            let at_types_dir = node_modules.join("@types").join(package_name.trim_start_matches('@').replace('/', "__"));
+            if at_types_dir.exists() {
+                let idx_path = at_types_dir.join("index.d.ts");
+                if idx_path.exists() {
+                    return Some(ResolvedModule {
+                        resolved_file_name: idx_path.to_string_lossy().to_string(),
+                        extension: Extension::Dts,
+                        is_external_library_import: true,
+                        package_json_path: None,
+                    });
+                }
+            }
+        }
+        
+        if !dir.pop() {
+            break;
+        }
+    }
+    
+    None
+}
+
+/// Try file extensions with ESM/CJS awareness
+fn try_file_extensions_esm(candidate: &str, prefer_esm: bool) -> Option<ResolvedModule> {
+    // Try the path as-is first
+    if Path::new(candidate).exists() {
+        let ext = detect_extension(candidate);
+        return Some(ResolvedModule {
+            resolved_file_name: candidate.to_string(),
+            extension: ext,
+            is_external_library_import: false,
+            package_json_path: None,
+        });
+    }
+    
+    // Try extensions based on module type preference
+    let extensions_to_try = if prefer_esm {
+        // Try ESM extensions first, then standard
+        [ESM_EXTENSIONS, ALL_EXTENSIONS].concat()
+    } else {
+        // Try CJS extensions first, then standard
+        [CJS_EXTENSIONS, ALL_EXTENSIONS].concat()
+    };
+    
+    for ext in &extensions_to_try {
+        let path = format!("{}{}", candidate, ext.as_str());
+        if Path::new(&path).exists() {
+            return Some(ResolvedModule {
+                resolved_file_name: path,
+                extension: *ext,
+                is_external_library_import: false,
+                package_json_path: None,
+            });
+        }
+    }
+    
+    // Try /index
+    for ext in &extensions_to_try {
+        let path = format!("{}/index{}", candidate, ext.as_str());
+        if Path::new(&path).exists() {
+            return Some(ResolvedModule {
+                resolved_file_name: path,
+                extension: *ext,
+                is_external_library_import: false,
+                package_json_path: None,
+            });
+        }
+    }
+    
+    None
 }
 
 fn resolve_bundler(

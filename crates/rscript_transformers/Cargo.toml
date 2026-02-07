@@ -7,3 +7,4 @@ edition.workspace = true
 rscript_core = { workspace = true }
 rscript_ast = { workspace = true }
 bumpalo = { workspace = true }
+regex = { workspace = true }

@@ -446,15 +446,38 @@ impl Binder {
     fn bind_enum_declaration(&mut self, node: &EnumDeclaration<'_>) {
         let enum_symbol = self.declare_symbol_with_text(node.name.text, node.name.text_name.clone(), SymbolFlags::REGULAR_ENUM, node.data.id);
 
-        // Bind enum members
+        // Bind enum members — handle all property name variants
         for member in node.members.iter() {
-            if let PropertyName::Identifier(ref id) = member.name {
-                let member_symbol = self.declare_symbol_with_text(id.text, id.text_name.clone(), SymbolFlags::ENUM_MEMBER, member.data.id);
+            let member_name: Option<(InternedString, String)> = match &member.name {
+                PropertyName::Identifier(ref id) => {
+                    Some((id.text, id.text_name.clone()))
+                }
+                PropertyName::StringLiteral(ref tok) => {
+                    // Use position-based name since Token doesn't carry text
+                    let name = format!("__string_enum_{}_{}", tok.data.range.pos, tok.data.range.end);
+                    Some((InternedString::dummy(), name))
+                }
+                PropertyName::NumericLiteral(ref tok) => {
+                    let name = format!("__numeric_enum_{}_{}", tok.data.range.pos, tok.data.range.end);
+                    Some((InternedString::dummy(), name))
+                }
+                PropertyName::ComputedPropertyName(_) => {
+                    // Computed enum member names cannot be statically bound
+                    None
+                }
+                PropertyName::PrivateIdentifier(ref id) => {
+                    Some((id.text, id.text_name.clone()))
+                }
+            };
+
+            if let Some((interned, text_name)) = member_name {
+                let member_symbol = self.declare_symbol_with_text(interned, text_name, SymbolFlags::ENUM_MEMBER, member.data.id);
                 // Set parent
                 if let Some(sym) = self.symbols.get_mut(member_symbol.index()) {
                     sym.parent = Some(enum_symbol);
                 }
             }
+
             if let Some(init) = member.initializer {
                 self.bind_expression(init);
             }

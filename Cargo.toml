@@ -21,6 +21,7 @@ members = [
     "crates/rscript_ls",
     "crates/rscript_compiler",
     "crates/rscript_cli",
+    "crates/rscript_tests",
 ]
 
 [workspace.package]
@@ -75,6 +76,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # Source map
 sourcemap = "9.0"
 
+# Regex
+regex = "1.11"
+
 # Workspace crate references
 rscript_core = { path = "crates/rscript_core" }
 rscript_diagnostics = { path = "crates/rscript_diagnostics" }
@@ -97,8 +101,11 @@ rscript_ls = { path = "crates/rscript_ls" }
 rscript_compiler = { path = "crates/rscript_compiler" }
 
 [profile.release]
-lto = "fat"
+lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
 opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1

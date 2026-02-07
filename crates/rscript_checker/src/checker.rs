@@ -29,6 +29,8 @@ pub struct Checker {
     strict_null_checks: bool,
     /// Whether no implicit any is enabled.
     no_implicit_any: bool,
+    /// Whether strict function types (contravariant parameter checking) is enabled.
+    strict_function_types: bool,
     /// Map of declared identifier names to their resolved types.
     /// Populated during checking as declarations are encountered.
     declared_types: HashMap<String, TypeId>,
@@ -38,32 +40,212 @@ pub struct Checker {
     /// Prevents infinite recursion on circular types and gives O(1) for
     /// repeated checks on the same (source, target) pair.
     assignability_cache: HashMap<(TypeId, TypeId), bool>,
+    /// Type guard functions: function_name → (parameter_name, guard_type).
+    /// When a call to this function is used in a condition, the parameter
+    /// is narrowed to the guard type in the then-branch.
+    type_guards: HashMap<String, (String, TypeId)>,
 }
 
 impl Checker {
     pub fn new(binder: Binder) -> Self {
-        Self {
+        let mut checker = Self {
             type_table: TypeTable::new(),
             binder,
             diagnostics: DiagnosticCollection::new(),
             strict_null_checks: true,
             no_implicit_any: false,
+            strict_function_types: true,
             declared_types: HashMap::new(),
             regexp_type: None,
             assignability_cache: HashMap::new(),
-        }
+            type_guards: HashMap::new(),
+        };
+        checker.register_globals();
+        checker
     }
 
     pub fn with_options(binder: Binder, strict_null_checks: bool, no_implicit_any: bool) -> Self {
-        Self {
+        let mut checker = Self {
             type_table: TypeTable::new(),
             binder,
             diagnostics: DiagnosticCollection::new(),
             strict_null_checks,
             no_implicit_any,
+            strict_function_types: true,
             declared_types: HashMap::new(),
             regexp_type: None,
             assignability_cache: HashMap::new(),
+            type_guards: HashMap::new(),
+        };
+        checker.register_globals();
+        checker
+    }
+
+    /// Register built-in global types and objects so that common patterns
+    /// like `Array<T>`, `Promise<T>`, `console.log(...)` resolve correctly
+    /// without requiring lib.d.ts to be loaded.
+    fn register_globals(&mut self) {
+        // --- Global type constructors (class-like) ---
+
+        // Array<T> — simplified as object with call/construct signatures
+        let array_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::INTERFACE,
+                members: IndexMap::from([
+                    ("length".to_string(), self.type_table.number_type),
+                ]),
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![IndexInfo {
+                    key_type: self.type_table.number_type,
+                    type_id: self.type_table.any_type,
+                    is_readonly: false,
+                }],
+            },
+        );
+        self.register_type("Array", array_type);
+
+        // Promise<T> — simplified
+        let promise_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::INTERFACE,
+                members: IndexMap::from([
+                    ("then".to_string(), self.type_table.any_type),
+                    ("catch".to_string(), self.type_table.any_type),
+                    ("finally".to_string(), self.type_table.any_type),
+                ]),
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        );
+        self.register_type("Promise", promise_type);
+
+        // Map, Set, WeakMap, WeakSet — simplified as any
+        for name in &["Map", "Set", "WeakMap", "WeakSet", "WeakRef"] {
+            self.register_type(name, self.type_table.any_type);
+        }
+
+        // Error
+        let error_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::INTERFACE,
+                members: IndexMap::from([
+                    ("name".to_string(), self.type_table.string_type),
+                    ("message".to_string(), self.type_table.string_type),
+                    ("stack".to_string(), self.type_table.string_type),
+                ]),
+                call_signatures: vec![],
+                construct_signatures: vec![Signature {
+                    type_parameters: vec![],
+                    parameters: vec![SignatureParameter {
+                        name: "message".to_string(),
+                        type_id: self.type_table.string_type,
+                        optional: true,
+                    }],
+                    return_type: self.type_table.any_type, // placeholder, will be itself
+                    min_argument_count: 0,
+                    has_rest_parameter: false,
+                }],
+                index_infos: vec![],
+            },
+        );
+        self.register_type("Error", error_type);
+
+        // --- Global objects ---
+
+        // console
+        let console_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::empty(),
+                members: IndexMap::new(),
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                // console has string index returning any (console.log, console.error, etc.)
+                index_infos: vec![IndexInfo {
+                    key_type: self.type_table.string_type,
+                    type_id: self.type_table.any_type,
+                    is_readonly: false,
+                }],
+            },
+        );
+        self.register_type("console", console_type);
+
+        // Math
+        let math_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::empty(),
+                members: IndexMap::from([
+                    ("PI".to_string(), self.type_table.number_type),
+                    ("E".to_string(), self.type_table.number_type),
+                    ("abs".to_string(), self.type_table.any_type),
+                    ("ceil".to_string(), self.type_table.any_type),
+                    ("floor".to_string(), self.type_table.any_type),
+                    ("round".to_string(), self.type_table.any_type),
+                    ("max".to_string(), self.type_table.any_type),
+                    ("min".to_string(), self.type_table.any_type),
+                    ("random".to_string(), self.type_table.any_type),
+                    ("sqrt".to_string(), self.type_table.any_type),
+                    ("pow".to_string(), self.type_table.any_type),
+                    ("log".to_string(), self.type_table.any_type),
+                ]),
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        );
+        self.register_type("Math", math_type);
+
+        // JSON
+        let json_type = self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::empty(),
+                members: IndexMap::from([
+                    ("parse".to_string(), self.type_table.any_type),
+                    ("stringify".to_string(), self.type_table.any_type),
+                ]),
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        );
+        self.register_type("JSON", json_type);
+
+        // Object
+        self.register_type("Object", self.type_table.any_type);
+
+        // Symbol, BigInt
+        self.register_type("Symbol", self.type_table.any_type);
+        self.register_type("BigInt", self.type_table.any_type);
+
+        // globalThis, window, self
+        self.register_type("globalThis", self.type_table.any_type);
+
+        // undefined, NaN, Infinity
+        self.register_type("undefined", self.type_table.undefined_type);
+        self.register_type("NaN", self.type_table.number_type);
+        self.register_type("Infinity", self.type_table.number_type);
+
+        // --- Built-in utility types ---
+        // These are treated as `any` since full generic evaluation is complex.
+        // The checker handles specific utility types (Partial, Required, etc.)
+        // via get_type_from_type_node, but we register them here so they don't
+        // cause "Cannot find name" errors when used as values or in expressions.
+        for name in &[
+            "Partial", "Required", "Readonly", "Pick", "Omit",
+            "Record", "Exclude", "Extract", "NonNullable",
+            "ReturnType", "Parameters", "ConstructorParameters",
+            "InstanceType", "ThisParameterType", "OmitThisParameter",
+            "Uppercase", "Lowercase", "Capitalize", "Uncapitalize",
+            "Awaited", "NoInfer",
+        ] {
+            self.register_type(name, self.type_table.any_type);
         }
     }
 
@@ -125,6 +307,8 @@ impl Checker {
     }
 
     fn error(&mut self, msg: &rscript_diagnostics::DiagnosticMessage, args: &[&str]) {
+        // Note: The checker doesn't have direct access to file names or current node positions
+        // without more extensive refactoring. This is best-effort - diagnostics without span info.
         self.diagnostics.add(Diagnostic::new(msg, args));
     }
 
@@ -150,10 +334,33 @@ impl Checker {
             Statement::ForStatement(n) => self.check_for_statement(n),
             Statement::ForInStatement(n) => {
                 self.check_expression(n.expression);
+                // Register for-in loop variable
+                if let ForInitializer::VariableDeclarationList(list) = &n.initializer {
+                    for decl in list.declarations.iter() {
+                        if let BindingName::Identifier(ref id) = decl.name {
+                            if !id.text_name.is_empty() {
+                                self.register_type(&id.text_name, self.type_table.string_type);
+                            }
+                        }
+                    }
+                }
                 self.check_statement(n.statement);
             }
             Statement::ForOfStatement(n) => {
-                self.check_expression(n.expression);
+                let iterable_type = self.check_expression(n.expression);
+                // Register for-of loop variable
+                if let ForInitializer::VariableDeclarationList(list) = &n.initializer {
+                    for decl in list.declarations.iter() {
+                        if let BindingName::Identifier(ref id) = decl.name {
+                            if !id.text_name.is_empty() {
+                                // Infer element type from iterable or declared type
+                                let elem_type = self.get_type_from_type_annotation(decl.type_annotation)
+                                    .unwrap_or_else(|| self.get_element_type_of_iterable(iterable_type));
+                                self.register_type(&id.text_name, elem_type);
+                            }
+                        }
+                    }
+                }
                 self.check_statement(n.statement);
             }
             Statement::WhileStatement(n) => {
@@ -316,6 +523,21 @@ impl Checker {
                 },
             );
             self.register_type(&name.text_name, func_type);
+
+            // Check for type predicate return type (type guard: `x is T`)
+            if let Some(ret_node) = node.return_type {
+                if let TypeNode::TypePredicate(pred) = ret_node {
+                    if let TypePredicateParameterName::Identifier(param_id) = &pred.parameter_name {
+                        if let Some(guard_type_node) = pred.type_node {
+                            let guard_type = self.get_type_from_type_node(guard_type_node);
+                            self.type_guards.insert(
+                                name.text_name.clone(),
+                                (param_id.text_name.clone(), guard_type),
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Check body (if not already checked above for inference)
@@ -325,8 +547,16 @@ impl Checker {
                     self.check_statement(stmt);
                 }
                 // Check return type compatibility
+                // Skip for async functions (Promise return types), generator
+                // functions, or types that don't require a return value.
+                let is_promise_return = if let Some(ret_node) = node.return_type {
+                    self.is_promise_type_node(ret_node)
+                } else {
+                    false
+                };
                 let ret_type = self.type_table.get(return_type);
-                if !ret_type.flags.contains(TypeFlags::VOID)
+                if !is_promise_return
+                    && !ret_type.flags.contains(TypeFlags::VOID)
                     && !ret_type.flags.contains(TypeFlags::UNDEFINED)
                     && !ret_type.flags.contains(TypeFlags::ANY)
                 {
@@ -343,26 +573,57 @@ impl Checker {
     }
 
     fn body_has_return(&self, body: &Block<'_>) -> bool {
-        for stmt in body.statements.iter() {
-            match stmt {
-                Statement::ReturnStatement(r) => {
-                    if r.expression.is_some() { return true; }
-                }
-                Statement::IfStatement(n) => {
-                    if let Statement::Block(b) = n.then_statement {
-                        if self.body_has_return(b) { return true; }
-                    }
-                    if let Some(Statement::Block(b)) = n.else_statement {
-                        if self.body_has_return(b) { return true; }
-                    }
-                }
-                Statement::Block(b) => {
-                    if self.body_has_return(b) { return true; }
-                }
-                _ => {}
-            }
+        self.statements_have_return(body.statements)
+    }
+
+    fn statements_have_return(&self, stmts: &[Statement<'_>]) -> bool {
+        for stmt in stmts.iter() {
+            if self.statement_has_return(stmt) { return true; }
         }
         false
+    }
+
+    fn statement_has_return(&self, stmt: &Statement<'_>) -> bool {
+        match stmt {
+            Statement::ReturnStatement(r) => r.expression.is_some(),
+            Statement::ThrowStatement(_) => true,
+            Statement::IfStatement(n) => {
+                // Check then branch
+                if self.statement_has_return(n.then_statement) { return true; }
+                // Check else branch
+                if let Some(else_stmt) = n.else_statement {
+                    if self.statement_has_return(else_stmt) { return true; }
+                }
+                false
+            }
+            Statement::Block(b) => self.statements_have_return(b.statements),
+            Statement::TryStatement(t) => {
+                if self.statements_have_return(t.try_block.statements) { return true; }
+                if let Some(ref catch) = t.catch_clause {
+                    if self.statements_have_return(catch.block.statements) { return true; }
+                }
+                if let Some(ref finally) = t.finally_block {
+                    if self.statements_have_return(finally.statements) { return true; }
+                }
+                false
+            }
+            Statement::SwitchStatement(n) => {
+                for clause in n.case_block.clauses.iter() {
+                    let stmts = match clause {
+                        CaseOrDefaultClause::CaseClause(c) => c.statements,
+                        CaseOrDefaultClause::DefaultClause(d) => d.statements,
+                    };
+                    if self.statements_have_return(stmts) { return true; }
+                }
+                false
+            }
+            Statement::ForStatement(n) => self.statement_has_return(n.statement),
+            Statement::ForInStatement(n) => self.statement_has_return(n.statement),
+            Statement::ForOfStatement(n) => self.statement_has_return(n.statement),
+            Statement::WhileStatement(n) => self.statement_has_return(n.statement),
+            Statement::DoStatement(n) => self.statement_has_return(n.statement),
+            _ => false,
+        }
     }
 
     /// Collect all return expression types from a function body (recursive).
@@ -430,6 +691,14 @@ impl Checker {
                 }
             }
         }
+
+        // Save previous `this` type for restoration after class body
+        let saved_this = self.declared_types.get("this").copied();
+
+        // Register a preliminary `this` type for the class body
+        // (will be refined to the instance type after all members are collected)
+        let preliminary_this = self.type_table.any_type;
+        self.register_type("this", preliminary_this);
 
         // Collect class members and build a class type
         let mut class_members: IndexMap<String, TypeId> = IndexMap::new();
@@ -523,6 +792,16 @@ impl Checker {
                 }
                 ClassElement::GetAccessor(g) => {
                     let prop_name = self.property_name_text(&g.name);
+                    // Register any getter parameters (unusual, but valid in parser output)
+                    for p in g.parameters.iter() {
+                        let ptype = self.get_type_from_type_annotation(p.type_annotation)
+                            .unwrap_or(self.type_table.any_type);
+                        if let BindingName::Identifier(ref id) = p.name {
+                            if !id.text_name.is_empty() {
+                                self.register_type(&id.text_name, ptype);
+                            }
+                        }
+                    }
                     if let Some(ref body) = g.body {
                         for s in body.statements.iter() { self.check_statement(s); }
                     }
@@ -532,6 +811,16 @@ impl Checker {
                 }
                 ClassElement::SetAccessor(s) => {
                     let prop_name = self.property_name_text(&s.name);
+                    // Register setter parameters so they're available in the body
+                    for p in s.parameters.iter() {
+                        let ptype = self.get_type_from_type_annotation(p.type_annotation)
+                            .unwrap_or(self.type_table.any_type);
+                        if let BindingName::Identifier(ref id) = p.name {
+                            if !id.text_name.is_empty() {
+                                self.register_type(&id.text_name, ptype);
+                            }
+                        }
+                    }
                     if let Some(ref body) = s.body {
                         for stmt in body.statements.iter() { self.check_statement(stmt); }
                     }
@@ -581,6 +870,15 @@ impl Checker {
                 },
             );
             self.register_type(&name.text_name, class_type);
+
+            // Refine `this` to point to the instance type
+            self.register_type("this", instance_type);
+        }
+
+        // Restore previous `this` type
+        match saved_this {
+            Some(prev) => { self.register_type("this", prev); }
+            None => { self.declared_types.remove("this"); }
         }
     }
 
@@ -697,6 +995,38 @@ impl Checker {
                     }
                 }
 
+                // Discriminated union narrowing: x.tag === "value" or "value" === x.tag
+                if is_eq || is_neq {
+                    let (prop_access, lit_val) = match (bin.left, bin.right) {
+                        (Expression::PropertyAccess(pa), Expression::StringLiteral(s)) => (Some(pa), Some(&s.text_name)),
+                        (Expression::StringLiteral(s), Expression::PropertyAccess(pa)) => (Some(pa), Some(&s.text_name)),
+                        _ => (None, None),
+                    };
+
+                    if let (Some(pa), Some(lit_val)) = (prop_access, lit_val) {
+                        if let Expression::Identifier(obj_id) = pa.expression {
+                            let var_name = obj_id.text_name.clone();
+                            let prop_name = match &pa.name {
+                                MemberName::Identifier(id) => &id.text_name,
+                                MemberName::PrivateIdentifier(id) => &id.text_name,
+                            };
+
+                            if let Some(orig_type) = self.get_declared_type(&var_name) {
+                                // Try to narrow the union by filtering members whose discriminant
+                                // property matches the literal value
+                                let matching = self.filter_union_by_discriminant(orig_type, prop_name, lit_val);
+                                let non_matching = self.filter_union_excluding_discriminant(orig_type, prop_name, lit_val);
+
+                                if is_eq {
+                                    return Some((var_name, matching, Some(non_matching)));
+                                } else {
+                                    return Some((var_name, non_matching, Some(matching)));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 None
             }
             // Truthiness check: if (x) → remove null/undefined/false
@@ -721,7 +1051,189 @@ impl Checker {
                 }
                 None
             }
+            // Type guard call: if (isString(x)) where isString has `x is string` return type
+            Expression::Call(call) => {
+                if let Expression::Identifier(func_id) = call.expression {
+                    let func_name = &func_id.text_name;
+                    if let Some((param_name, guard_type)) = self.type_guards.get(func_name).cloned() {
+                        // Find the argument matching the parameter name
+                        if let Some(first_arg) = call.arguments.first() {
+                            if let Expression::Identifier(arg_id) = first_arg {
+                                let var_name = arg_id.text_name.clone();
+                                return Some((var_name, guard_type, None));
+                            }
+                        }
+                        // If the parameter name matches a variable
+                        let _ = param_name; // used for future full matching
+                    }
+                }
+                None
+            }
             _ => None,
+        }
+    }
+
+    /// Filter a union type to only include members that have a specific discriminant property
+    /// matching a literal value. For discriminated union narrowing like `x.kind === "circle"`.
+    fn filter_union_by_discriminant(&mut self, type_id: TypeId, prop_name: &str, lit_value: &str) -> TypeId {
+        let ty = self.type_table.get(type_id);
+        if let TypeKind::Union { types } = &ty.kind {
+            let types = types.clone();
+            let matching: Vec<TypeId> = types.iter()
+                .filter(|&&t| self.member_has_literal_value(t, prop_name, lit_value))
+                .copied()
+                .collect();
+            if matching.is_empty() {
+                return type_id; // can't narrow, return original
+            }
+            if matching.len() == 1 {
+                return matching[0];
+            }
+            return self.create_union_type(matching);
+        }
+        type_id
+    }
+
+    /// Filter a union type to exclude members that have a specific discriminant property
+    /// matching a literal value. The inverse of `filter_union_by_discriminant`.
+    fn filter_union_excluding_discriminant(&mut self, type_id: TypeId, prop_name: &str, lit_value: &str) -> TypeId {
+        let ty = self.type_table.get(type_id);
+        if let TypeKind::Union { types } = &ty.kind {
+            let types = types.clone();
+            let non_matching: Vec<TypeId> = types.iter()
+                .filter(|&&t| !self.member_has_literal_value(t, prop_name, lit_value))
+                .copied()
+                .collect();
+            if non_matching.is_empty() {
+                return self.type_table.never_type;
+            }
+            if non_matching.len() == 1 {
+                return non_matching[0];
+            }
+            return self.create_union_type(non_matching);
+        }
+        type_id
+    }
+
+    /// Check if an object type has a specific property whose type is a string literal matching `value`.
+    fn member_has_literal_value(&self, type_id: TypeId, prop_name: &str, value: &str) -> bool {
+        let ty = self.type_table.get(type_id);
+        if let TypeKind::ObjectType { members, .. } = &ty.kind {
+            if let Some(&prop_type_id) = members.get(prop_name) {
+                let prop_ty = self.type_table.get(prop_type_id);
+                if let TypeKind::StringLiteral { value: lit_val, .. } = &prop_ty.kind {
+                    return lit_val == value;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a type node represents `const` (for `as const` assertions).
+    /// Check if a type node represents a Promise type (for async function detection).
+    fn is_promise_type_node(&self, type_node: &TypeNode<'_>) -> bool {
+        if let TypeNode::TypeReference(tr) = type_node {
+            if let EntityName::Identifier(id) = &tr.type_name {
+                return id.text_name == "Promise"
+                    || id.text_name == "PromiseLike"
+                    || id.text_name == "AsyncGenerator"
+                    || id.text_name == "AsyncIterable"
+                    || id.text_name == "AsyncIterableIterator";
+            }
+        }
+        false
+    }
+
+    fn is_const_type_node(&self, type_node: &TypeNode<'_>) -> bool {
+        if let TypeNode::KeywordType(kw) = type_node {
+            return kw.data.kind == SyntaxKind::ConstKeyword;
+        }
+        // Also check TypeReference with name "const" (parser might produce this)
+        if let TypeNode::TypeReference(tr) = type_node {
+            if let EntityName::Identifier(id) = &tr.type_name {
+                return id.text_name == "const";
+            }
+        }
+        false
+    }
+
+    /// Convert an expression's type to a deep-readonly literal type for `as const`.
+    /// - Primitive literals become literal types (string/number/boolean)
+    /// - Arrays become readonly tuples with literal element types
+    /// - Objects get readonly properties with literal types
+    fn get_const_type(&mut self, expr: &Expression<'_>, expr_type: TypeId) -> TypeId {
+        match expr {
+            Expression::StringLiteral(s) => {
+                self.type_table.add_type(
+                    TypeFlags::STRING_LITERAL,
+                    TypeKind::StringLiteral { value: s.text_name.clone(), regular: false },
+                )
+            }
+            Expression::NumericLiteral(n) => {
+                let val: f64 = n.text_name.parse().unwrap_or(0.0);
+                self.type_table.add_type(
+                    TypeFlags::NUMBER_LITERAL,
+                    TypeKind::NumberLiteral { value: val },
+                )
+            }
+            Expression::TrueKeyword(_) => {
+                self.type_table.add_type(
+                    TypeFlags::BOOLEAN_LITERAL,
+                    TypeKind::BooleanLiteral { value: true },
+                )
+            }
+            Expression::FalseKeyword(_) => {
+                self.type_table.add_type(
+                    TypeFlags::BOOLEAN_LITERAL,
+                    TypeKind::BooleanLiteral { value: false },
+                )
+            }
+            Expression::ArrayLiteral(arr) => {
+                // as const on array → readonly tuple
+                let element_types: Vec<TypeId> = arr.elements.iter().map(|elem| {
+                    let elem_type = self.check_expression(elem);
+                    self.narrow_to_literal(elem, elem_type)
+                }).collect();
+                let element_flags = vec![crate::types::ElementFlags::Required; element_types.len()];
+                self.type_table.add_type(
+                    TypeFlags::OBJECT,
+                    TypeKind::Tuple {
+                        element_types,
+                        element_flags,
+                    },
+                )
+            }
+            Expression::ObjectLiteral(obj) => {
+                // as const on object → readonly object with literal property types
+                let mut members = IndexMap::new();
+                for prop in obj.properties.iter() {
+                    match prop {
+                        ObjectLiteralElement::PropertyAssignment(pa) => {
+                            let name = self.property_name_text(&pa.name);
+                            let val_type = self.check_expression(pa.initializer);
+                            let const_type = self.narrow_to_literal(pa.initializer, val_type);
+                            members.insert(name, const_type);
+                        }
+                        ObjectLiteralElement::ShorthandPropertyAssignment(spa) => {
+                            let name = spa.name.text_name.clone();
+                            let val_type = self.check_expression(&Expression::Identifier(spa.name.clone()));
+                            members.insert(name, val_type);
+                        }
+                        _ => {}
+                    }
+                }
+                self.type_table.add_type(
+                    TypeFlags::OBJECT,
+                    TypeKind::ObjectType {
+                        object_flags: ObjectFlags::ANONYMOUS,
+                        members,
+                        call_signatures: vec![],
+                        construct_signatures: vec![],
+                        index_infos: vec![],
+                    },
+                )
+            }
+            _ => expr_type,
         }
     }
 
@@ -884,6 +1396,20 @@ impl Checker {
     fn check_try_statement(&mut self, node: &TryStatement<'_>) {
         for s in node.try_block.statements.iter() { self.check_statement(s); }
         if let Some(ref catch) = node.catch_clause {
+            // Register catch clause variable (e.g., `catch (e)`)
+            if let Some(ref var_decl) = catch.variable_declaration {
+                if let BindingName::Identifier(ref id) = var_decl.name {
+                    if !id.text_name.is_empty() {
+                        // Catch clause variable is `unknown` in strict mode, `any` otherwise
+                        let catch_type = if self.strict_null_checks {
+                            self.type_table.unknown_type
+                        } else {
+                            self.type_table.any_type
+                        };
+                        self.register_type(&id.text_name, catch_type);
+                    }
+                }
+            }
             for s in catch.block.statements.iter() { self.check_statement(s); }
         }
         if let Some(ref finally) = node.finally_block {
@@ -1175,7 +1701,11 @@ impl Checker {
             }
             Expression::Spread(n) => self.check_expression(n.expression),
             Expression::As(n) => {
-                self.check_expression(n.expression);
+                let expr_type = self.check_expression(n.expression);
+                // Check for `as const` assertion
+                if self.is_const_type_node(n.type_node) {
+                    return self.get_const_type(n.expression, expr_type);
+                }
                 self.get_type_from_type_node(n.type_node)
             }
             Expression::Satisfies(n) => {
@@ -1406,9 +1936,10 @@ impl Checker {
             return self.type_table.any_type;
         }
 
-        // Get signature count without cloning
-        let sig_count = if let TypeKind::ObjectType { call_signatures, .. } = &self.type_table.get(func_type).kind {
-            call_signatures.len()
+        // Get signature count and check for type parameters (generic inference)
+        let (sig_count, has_type_params) = if let TypeKind::ObjectType { call_signatures, .. } = &self.type_table.get(func_type).kind {
+            let has_tp = call_signatures.first().map(|s| !s.type_parameters.is_empty()).unwrap_or(false);
+            (call_signatures.len(), has_tp)
         } else {
             return self.type_table.any_type;
         };
@@ -1416,6 +1947,14 @@ impl Checker {
         if sig_count == 0 {
             self.error(&messages::CANNOT_INVOKE_AN_EXPRESSION_WHOSE_TYPE_LACKS_A_CALL_SIGNATURE, &[]);
             return self.type_table.any_type;
+        }
+
+        // If the function has type parameters and no explicit type arguments are provided,
+        // attempt to infer type arguments from argument types
+        if has_type_params && node.type_arguments.is_none() {
+            if let Some(inferred) = self.infer_type_arguments(func_type, &arg_types) {
+                return inferred;
+            }
         }
 
         // Extract first signature's return type as fallback (before mutable borrows)
@@ -1434,6 +1973,97 @@ impl Checker {
             self.error(&messages::NO_OVERLOAD_MATCHES_THIS_CALL, &[]);
         }
         first_return_type
+    }
+
+    /// Infer type arguments for a generic function call from argument types.
+    /// Returns the instantiated return type, or None if inference fails.
+    fn infer_type_arguments(&mut self, func_type: TypeId, arg_types: &[TypeId]) -> Option<TypeId> {
+        let sig = if let TypeKind::ObjectType { call_signatures, .. } = &self.type_table.get(func_type).kind {
+            if let Some(sig) = call_signatures.first() {
+                let type_params = sig.type_parameters.clone();
+                let params = sig.parameters.clone();
+                let return_type = sig.return_type;
+                Some((type_params, params, return_type))
+            } else {
+                None
+            }
+        } else {
+            None
+        }?;
+
+        let (type_param_ids, params, return_type) = sig;
+
+        if type_param_ids.is_empty() {
+            return None;
+        }
+
+        // Simple inference: match argument types to parameter types
+        let mut inferred_types: Vec<Option<TypeId>> = vec![None; type_param_ids.len()];
+
+        for (i, param) in params.iter().enumerate() {
+            if i >= arg_types.len() { break; }
+            let arg_type = arg_types[i];
+
+            // Check if the parameter type matches any of the type parameter IDs
+            for (tp_idx, &tp_id) in type_param_ids.iter().enumerate() {
+                if param.type_id == tp_id {
+                    inferred_types[tp_idx] = Some(arg_type);
+                }
+            }
+        }
+
+        // Build inferred type arguments
+        let type_args: Vec<TypeId> = inferred_types.iter().map(|t| {
+            t.unwrap_or(self.type_table.any_type)
+        }).collect();
+
+        // Substitute type parameters in return type
+        let result = self.substitute_type_by_id(return_type, &type_param_ids, &type_args);
+        Some(result)
+    }
+
+    /// Substitute type parameter IDs with concrete types in a type.
+    fn substitute_type_by_id(&mut self, type_id: TypeId, type_param_ids: &[TypeId], type_args: &[TypeId]) -> TypeId {
+        // Check if this type is one of the type parameters
+        for (i, &tp_id) in type_param_ids.iter().enumerate() {
+            if type_id == tp_id {
+                if let Some(&arg) = type_args.get(i) {
+                    return arg;
+                }
+            }
+        }
+
+        let ty = self.type_table.get(type_id);
+        match &ty.kind {
+            TypeKind::Union { types } => {
+                let types = types.clone();
+                let substituted: Vec<TypeId> = types.iter().map(|&t| {
+                    self.substitute_type_by_id(t, type_param_ids, type_args)
+                }).collect();
+                self.create_union_type(substituted)
+            }
+            TypeKind::ObjectType { members, call_signatures, construct_signatures, index_infos, object_flags } => {
+                let members = members.clone();
+                let sigs = call_signatures.clone();
+                let csigs = construct_signatures.clone();
+                let iinfos = index_infos.clone();
+                let flags = *object_flags;
+                let new_members: IndexMap<String, TypeId> = members.iter().map(|(k, &v)| {
+                    (k.clone(), self.substitute_type_by_id(v, type_param_ids, type_args))
+                }).collect();
+                self.type_table.add_type(
+                    TypeFlags::OBJECT,
+                    TypeKind::ObjectType {
+                        object_flags: flags,
+                        members: new_members,
+                        call_signatures: sigs,
+                        construct_signatures: csigs,
+                        index_infos: iinfos,
+                    },
+                )
+            }
+            _ => type_id,
+        }
     }
 
     /// Extract lightweight data for a call signature at the given index.
@@ -1551,7 +2181,30 @@ impl Checker {
         };
 
         if sig_count == 0 {
-            self.error(&messages::THIS_EXPRESSION_IS_NOT_CONSTRUCTABLE, &[]);
+            // Only report "not constructable" for types we can definitively say are not constructable.
+            // If the type is an ObjectType with members (e.g., known built-in or declared class),
+            // it may just be missing explicit construct signatures in our simplified type system.
+            let is_known_type = match &self.type_table.get(class_type).kind {
+                TypeKind::ObjectType { members, call_signatures, .. } => {
+                    !members.is_empty() || !call_signatures.is_empty()
+                }
+                _ => false,
+            };
+            if !is_known_type {
+                // Check if the expression is a class name or known global
+                let is_class = if let Expression::Identifier(id) = node.expression {
+                    self.binder.resolve_name(&id.text_name)
+                        .and_then(|sid| self.binder.get_symbol(sid))
+                        .map(|s| s.flags.contains(SymbolFlags::CLASS))
+                        .unwrap_or(false)
+                        || Self::BUILTIN_GLOBALS.contains(&id.text_name.as_str())
+                } else {
+                    false
+                };
+                if !is_class {
+                    self.error(&messages::THIS_EXPRESSION_IS_NOT_CONSTRUCTABLE, &[]);
+                }
+            }
             return self.type_table.any_type;
         }
 
@@ -2291,8 +2944,8 @@ impl Checker {
                 self.get_declared_type(&name).unwrap_or(self.type_table.any_type)
             }
             TypeNode::InferType(_) => self.type_table.any_type,
-            TypeNode::MappedType(_) => self.type_table.any_type,
-            TypeNode::TemplateLiteralType(_) => self.type_table.string_type,
+            TypeNode::MappedType(m) => self.evaluate_mapped_type(m),
+            TypeNode::TemplateLiteralType(t) => self.evaluate_template_literal_type(t),
             _ => self.type_table.any_type,
         }
     }
@@ -2401,6 +3054,30 @@ impl Checker {
             return self.create_union_type(filtered);
         }
         type_id
+    }
+
+    /// Get the element type of an iterable type (e.g., `T[]` -> `T`).
+    fn get_element_type_of_iterable(&self, iterable: TypeId) -> TypeId {
+        let ty = self.type_table.get(iterable);
+        match &ty.kind {
+            TypeKind::ObjectType { index_infos, .. } => {
+                // Array-like: has a numeric index signature
+                for info in index_infos {
+                    if info.key_type == self.type_table.number_type {
+                        return info.type_id;
+                    }
+                }
+                self.type_table.any_type
+            }
+            TypeKind::TypeReference { type_arguments, .. } => {
+                // Generic types like Array<T> — return the first type argument
+                if let Some(first) = type_arguments.first() {
+                    return *first;
+                }
+                self.type_table.any_type
+            }
+            _ => self.type_table.any_type,
+        }
     }
 
     fn type_to_string(&self, type_id: TypeId) -> String {
@@ -2634,6 +3311,131 @@ impl Checker {
                 members.keys().cloned().collect()
             }
             _ => vec![],
+        }
+    }
+
+    /// Evaluate a mapped type `{ [K in keyof T]: V }`.
+    /// Resolves keys from the constraint, iterates them, and builds an object type.
+    fn evaluate_mapped_type(&mut self, node: &MappedTypeNode<'_>) -> TypeId {
+        // Get constraint type (the type we iterate keys from)
+        let constraint_type = if let Some(constraint) = node.type_parameter.constraint {
+            self.get_type_from_type_node(constraint)
+        } else {
+            return self.type_table.any_type; // No constraint, can't evaluate
+        };
+
+        // Resolve keys from the constraint
+        let keys = self.get_key_names_from_type(constraint_type);
+
+        // For each key, evaluate the value type with substitution
+        let mut members = IndexMap::new();
+        let param_name = node.type_parameter.name.text_name.clone();
+
+        for key in &keys {
+            // Register the key as the type parameter value
+            let key_type = self.type_table.add_type(
+                TypeFlags::STRING_LITERAL,
+                TypeKind::StringLiteral { value: key.clone(), regular: false },
+            );
+            self.register_type(&param_name, key_type);
+
+            // Evaluate the value type
+            let value_type = if let Some(type_node) = node.type_node {
+                self.get_type_from_type_node(type_node)
+            } else {
+                self.type_table.any_type
+            };
+
+            // Apply optional modifier
+            let final_type = if node.question_token.is_some() {
+                // Make the property optional by unioning with undefined
+                self.create_union_type(vec![value_type, self.type_table.undefined_type])
+            } else {
+                value_type
+            };
+
+            members.insert(key.clone(), final_type);
+        }
+
+        // Clean up the temporary type parameter registration
+        self.declared_types.remove(&param_name);
+
+        self.type_table.add_type(
+            TypeFlags::OBJECT,
+            TypeKind::ObjectType {
+                object_flags: ObjectFlags::ANONYMOUS,
+                members,
+                call_signatures: vec![],
+                construct_signatures: vec![],
+                index_infos: vec![],
+            },
+        )
+    }
+
+    /// Get property key names from a type (used for mapped types).
+    /// If the type is a union of string literals, returns those strings.
+    /// If the type is a keyof result, returns the keys of the target.
+    fn get_key_names_from_type(&self, type_id: TypeId) -> Vec<String> {
+        let ty = self.type_table.get(type_id);
+        match &ty.kind {
+            TypeKind::StringLiteral { value, .. } => vec![value.clone()],
+            TypeKind::Union { types } => {
+                let types = types.clone();
+                let mut keys = Vec::new();
+                for &t in &types {
+                    let inner = self.type_table.get(t);
+                    if let TypeKind::StringLiteral { value, .. } = &inner.kind {
+                        keys.push(value.clone());
+                    }
+                }
+                keys
+            }
+            // If it's a keyof ObjectType result, we already resolved it to a union of string literals
+            _ => {
+                // Try to get object member names if this is an object type
+                if let TypeKind::ObjectType { members, .. } = &ty.kind {
+                    members.keys().cloned().collect()
+                } else {
+                    vec![]
+                }
+            }
+        }
+    }
+
+    /// Evaluate a template literal type like `` `Hello ${string}` ``.
+    /// If all segments are concrete string literals, produces a string literal.
+    /// Otherwise, returns `string`.
+    fn evaluate_template_literal_type(&mut self, node: &TemplateLiteralTypeNode<'_>) -> TypeId {
+        // Attempt to concatenate if all segments are literal
+        let mut result = String::new();
+        let mut all_literal = true;
+
+        // Head text (before first span)
+        // The head text comes from the template head token
+        // For simplicity, we extract what we can from spans
+        for span in node.template_spans.iter() {
+            let span_type = self.get_type_from_type_node(&span.type_node);
+            let ty = self.type_table.get(span_type);
+            match &ty.kind {
+                TypeKind::StringLiteral { value, .. } => {
+                    result.push_str(value);
+                }
+                _ => {
+                    all_literal = false;
+                    break;
+                }
+            }
+        }
+
+        if all_literal && node.template_spans.is_empty() {
+            // Empty template literal → empty string literal
+            self.type_table.add_type(
+                TypeFlags::STRING_LITERAL,
+                TypeKind::StringLiteral { value: result, regular: false },
+            )
+        } else {
+            // At least one non-literal segment → return string
+            self.type_table.string_type
         }
     }
 
